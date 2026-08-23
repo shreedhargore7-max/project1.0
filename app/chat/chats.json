@@ -1,0 +1,53 @@
+[
+    {
+        "id": "37997f0e-dde8-4b8c-b932-f542bdf7f608",
+        "title": "My name is Shreedhar",
+        "created_at": "2026-08-23T15:48:53.993940",
+        "updated_at": "2026-08-23T15:48:54.016352",
+        "messages": [
+            {
+                "role": "user",
+                "content": "My name is Shreedhar"
+            }
+        ]
+    },
+    {
+        "id": "ee91d609-fa8c-4ec1-a972-c7dd22c18a5d",
+        "title": "My name is Shreedhar",
+        "created_at": "2026-08-23T15:51:10.221919",
+        "updated_at": "2026-08-23T15:59:09.364915",
+        "messages": [
+            {
+                "role": "user",
+                "content": "My name is Shreedhar"
+            },
+            {
+                "role": "assistant",
+                "content": "Nice to meet you, Shreedhar!"
+            },
+            {
+                "role": "user",
+                "content": "what is my name"
+            },
+            {
+                "role": "assistant",
+                "content": "Your name is Shreedhar."
+            },
+            {
+                "role": "user",
+                "content": "I am leaning python "
+            },
+            {
+                "role": "assistant",
+                "content": "The provided search results do not contain information or resources about learning Python. Instead, the search results discuss how AI models and applications manage conversation history, prompt structures, and roles (System, User, and Assistant) to remember context across messages."
+            }
+        ]
+    },
+    {
+        "id": "ef674b25-c99c-4d42-973d-d17f31a34317",
+        "title": "New Chat",
+        "created_at": "2026-08-23T15:57:36.824318",
+        "updated_at": "2026-08-23T15:57:36.824318",
+        "messages": []
+    }
+]

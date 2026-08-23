@@ -1,100 +1,68 @@
-import os
-import sys
-from pathlib import Path
 from typing import TypedDict
 
-from dotenv import load_dotenv
-from langgraph.graph import StateGraph, START, END
-from google import genai
+from langgraph.graph import StateGraph, END
 
-
-# ============================================================
-# PROJECT PATH
-# ============================================================
-
-PROJECT_DIR = Path(__file__).resolve().parents[2]
-APP_DIR = PROJECT_DIR / "app"
-
-if str(APP_DIR) not in sys.path:
-    sys.path.insert(0, str(APP_DIR))
-
-
-# ============================================================
-# IMPORT OUR TOOLS
-# ============================================================
-
-from agent.tools import (
-    pdf_search_tool,
-    web_search_tool,
-    memory_search_tool,
-    memory_save_tool,
+from app.agent.mcp_tools import (
+    mcp_memory_search,
+    mcp_memory_save,
+    mcp_pdf_search,
+    mcp_chat_history_search,
 )
 
-
-# ============================================================
-# LOAD ENVIRONMENT
-# ============================================================
-
-ENV_FILE = PROJECT_DIR / ".env"
-
-print("Loading .env from:")
-print(ENV_FILE)
-
-load_dotenv(
-    dotenv_path=ENV_FILE,
-    override=True
-)
+from app.chat.gemini_client import generate_answer
+from app.chat_history.chat_history_tool import save_chat
 
 
 # ============================================================
-# GEMINI API KEY
+# STATE
 # ============================================================
 
-API_KEY = os.getenv("GEMINI_API_KEY")
+class AgentState(TypedDict, total=False):
 
-print("API key loaded:", bool(API_KEY))
-
-if not API_KEY:
-    raise ValueError(
-        "GEMINI_API_KEY was not found in .env"
-    )
-
-print("API key length:", len(API_KEY))
-
-
-# ============================================================
-# GEMINI CLIENT
-# ============================================================
-
-client = genai.Client(
-    api_key=API_KEY
-)
-
-MODEL_NAME = "gemini-3.6-flash"
-
-
-# ============================================================
-# LANGGRAPH STATE
-# ============================================================
-
-class AgentState(TypedDict):
     question: str
+    chat_history: str
+    memory_context: str
+
     tool: str
     tool_result: str
+
     answer: str
 
 
 # ============================================================
-# TOOL SELECTION NODE
+# ROUTER
 # ============================================================
 
-def choose_tool_node(state: AgentState):
+def router_node(state: AgentState):
 
-    question = state["question"]
+    question = state.get("question", "").strip()
 
-    print("\nChoosing appropriate tool...")
+    print("\n========================================")
+    print("        INTELLIGENT AGENT")
+    print("========================================")
 
-    question_lower = question.lower()
+    print("\n[ROUTER] Question:")
+    print(question)
+
+    q = question.lower()
+
+    # --------------------------------------------------------
+    # MEMORY QUESTIONS
+    # --------------------------------------------------------
+
+    memory_keywords = [
+        "my name",
+        "my brother",
+        "my favorite",
+        "my favourite",
+        "what do i like",
+        "what is my",
+        "what's my",
+        "do you remember",
+        "remember that",
+        "i told you",
+        "i said",
+    ]
 
     # --------------------------------------------------------
     # PDF QUESTIONS
@@ -103,316 +71,471 @@ def choose_tool_node(state: AgentState):
     pdf_keywords = [
         "pdf",
         "document",
-        "in the file",
-        "in the document",
-        "mentioned in",
         "according to the document",
         "according to the pdf",
-        "company mentioned",
-        "what does the pdf say",
+        "in the document",
+        "in the pdf",
+        "what does the pdf",
+        "what does the document",
     ]
 
-    if any(
-        keyword in question_lower
-        for keyword in pdf_keywords
-    ):
-
-        selected_tool = "pdf"
-
     # --------------------------------------------------------
-    # WEB / CURRENT INFORMATION
+    # CHAT HISTORY
     # --------------------------------------------------------
 
-    elif any(
-        keyword in question_lower
-        for keyword in [
-            "latest",
-            "today",
-            "current",
-            "recent",
-            "news",
-            "live",
-            "now",
-            "stock price",
-            "share price",
-        ]
-    ):
+    history_keywords = [
+        "previous conversation",
+        "previous chat",
+        "earlier conversation",
+        "earlier chat",
+        "what did we discuss",
+        "what did i tell you",
+        "last conversation",
+        "last chat",
+    ]
 
-        selected_tool = "web"
+    if any(keyword in q for keyword in memory_keywords):
+
+        tool = "memory"
+
+    elif any(keyword in q for keyword in pdf_keywords):
+
+        tool = "pdf"
+
+    elif any(keyword in q for keyword in history_keywords):
+
+        tool = "chat_history"
+
+    else:
+
+        tool = "general"
+
+    print(f"[ROUTER] Selected tool: {tool}")
+
+    return {
+        "tool": tool
+    }
+
+
+# ============================================================
+# MEMORY NODE
+# ============================================================
+
+def memory_node(state: AgentState):
+
+    question = state["question"]
+
+    print("\n[AGENT] Executing MEMORY tool")
+
+    result = mcp_memory_search(question)
+
+    if result:
+
+        print("\n[MEMORY RESULT]")
+        print(result)
+
+    else:
+
+        result = "No relevant memories found."
+
+        print("[MEMORY] No relevant memories found.")
+
+    return {
+        "tool_result": result,
+        "memory_context": result,
+    }
+
+
+# ============================================================
+# PDF NODE
+# ============================================================
+
+def pdf_node(state: AgentState):
+
+    question = state["question"]
+
+    print("\n[AGENT] Executing PDF tool")
+
+    result = mcp_pdf_search(question)
+
+    if not result:
+
+        result = "No relevant information was found in the PDF."
+
+    print("\n[PDF RESULT]")
+    print(result)
+
+    return {
+        "tool_result": result
+    }
+
+
+# ============================================================
+# CHAT HISTORY NODE
+# ============================================================
+
+def chat_history_node(state: AgentState):
+
+    question = state["question"]
+
+    print("\n[AGENT] Executing CHAT HISTORY tool")
+
+    result = mcp_chat_history_search(question)
+
+    if not result:
+
+        result = "No relevant previous conversation was found."
+
+    print("\n[CHAT HISTORY RESULT]")
+    print(result)
+
+    return {
+        "tool_result": result
+    }
+
+
+# ============================================================
+# GENERAL GEMINI NODE
+# ============================================================
+
+def general_node(state: AgentState):
+
+    question = state["question"]
+
+    chat_history = state.get("chat_history", "")
+
+    print("\n[AGENT] General question")
+    print("[AGENT] Sending request to Gemini...")
+
+    prompt = f"""
+You are a helpful AI assistant.
+
+Answer the user's question naturally and conversationally.
+
+User question:
+{question}
+
+Previous conversation:
+{chat_history}
+
+Do not mention internal tools, memory systems, RAG, MCP, routing,
+or implementation details unless the user explicitly asks about them.
+
+Give a useful answer even if the question is simple.
+"""
+
+    try:
+
+        answer = generate_answer(prompt)
+
+    except Exception as e:
+
+        print(f"[AGENT] Gemini error: {e}")
+
+        answer = "I couldn't generate an answer right now."
+
+    return {
+        "answer": answer
+    }
+
+
+# ============================================================
+# TOOL RESULT → ANSWER
+# ============================================================
+
+def tool_answer_node(state: AgentState):
+
+    question = state["question"]
+
+    tool = state.get("tool", "")
+
+    result = state.get("tool_result", "")
+
+    print("\n[AGENT] Processing tool result")
+
+    if not result:
+
+        return {
+            "answer": "I couldn't find relevant information."
+        }
 
     # --------------------------------------------------------
     # MEMORY
     # --------------------------------------------------------
 
-    elif any(
-        keyword in question_lower
-        for keyword in [
-            "remember",
-            "memory",
-            "what am i",
-            "what am i researching",
-            "my project",
-            "what do you know about me",
-            "what did i tell you",
-        ]
-    ):
+    if tool == "memory":
 
-        selected_tool = "memory"
+        answer = result.strip()
 
-    # --------------------------------------------------------
-    # GENERAL GEMINI
-    # --------------------------------------------------------
-
-    else:
-
-        selected_tool = "gemini"
-
-    print("Selected tool:", selected_tool)
-
-    return {
-        "tool": selected_tool
-    }
-
-
-# ============================================================
-# TOOL EXECUTION NODE
-# ============================================================
-
-def execute_tool_node(state: AgentState):
-
-    question = state["question"]
-    selected_tool = state["tool"]
-
-    print("\nExecuting tool:", selected_tool)
-
-    try:
-
-        # ----------------------------------------------------
-        # PDF
-        # ----------------------------------------------------
-
-        if selected_tool == "pdf":
-
-            result = pdf_search_tool(question)
-
-        # ----------------------------------------------------
-        # WEB
-        # ----------------------------------------------------
-
-        elif selected_tool == "web":
-
-            result = web_search_tool(question)
-
-        # ----------------------------------------------------
-        # MEMORY
-        # ----------------------------------------------------
-
-        elif selected_tool == "memory":
-
-            result = memory_search_tool(question)
-
-        # ----------------------------------------------------
-        # GEMINI
-        # ----------------------------------------------------
-
-        else:
-
-            result = "No external tool is required."
+        # Don't expose internal formatting.
+        if answer.startswith("[") and answer.endswith("]"):
+            answer = answer.strip("[]")
 
         return {
-            "tool_result": result
+            "answer": answer
         }
 
-    except Exception as e:
+    # --------------------------------------------------------
+    # PDF
+    # --------------------------------------------------------
 
-        return {
-            "tool_result": f"Tool error: {str(e)}"
-        }
-
-
-# ============================================================
-# GEMINI NODE
-# ============================================================
-
-def llm_node(state: AgentState):
-
-    question = state["question"]
-    selected_tool = state["tool"]
-    tool_result = state["tool_result"]
-
-    print("\nSending information to Gemini...")
-
-    # ========================================================
-    # GENERAL QUESTION
-    # ========================================================
-
-    if selected_tool == "gemini":
+    if tool == "pdf":
 
         prompt = f"""
-You are a helpful AI assistant.
-
-Answer the user's question clearly and accurately.
+Answer the user's question using ONLY the information retrieved
+from the PDF.
 
 User question:
 {question}
+
+Retrieved PDF information:
+{result}
+
+Give a concise, natural answer.
+
+Do not mention MCP.
+Do not mention the routing system.
+Do not say "the tool returned".
 """
 
-    # ========================================================
-    # TOOL-BASED QUESTION
-    # ========================================================
+        try:
 
-    else:
+            answer = generate_answer(prompt)
+
+        except Exception:
+
+            answer = result
+
+        return {
+            "answer": answer
+        }
+
+    # --------------------------------------------------------
+    # CHAT HISTORY
+    # --------------------------------------------------------
+
+    if tool == "chat_history":
 
         prompt = f"""
-You are an AI assistant using external tools.
+Answer the user's question using the previous conversation below.
 
-The user asked:
-
+User question:
 {question}
 
-The selected tool was:
+Previous conversation:
+{result}
 
-{selected_tool}
+Answer naturally.
 
-The tool returned:
-
----------------- TOOL RESULT ----------------
-
-{tool_result}
-
--------------- END TOOL RESULT --------------
-
-Answer the user's question using the tool result.
-
-Important rules:
-
-1. Do not invent information.
-2. If the tool result does not contain the answer, say so.
-3. For PDF questions, use only the PDF information.
-4. For web questions, summarize the search results.
-5. For memory questions, use only the stored memories.
-6. Give a clear and concise answer.
+Do not mention MCP or internal tools.
 """
 
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt
-    )
+        try:
+
+            answer = generate_answer(prompt)
+
+        except Exception:
+
+            answer = result
+
+        return {
+            "answer": answer
+        }
 
     return {
-        "answer": response.text
+        "answer": result
     }
 
 
 # ============================================================
-# CREATE LANGGRAPH
+# MEMORY SAVE
+# ============================================================
+
+def memory_save_node(state: AgentState):
+
+    question = state.get("question", "")
+    answer = state.get("answer", "")
+
+    if not answer:
+
+        return {}
+
+    # Don't save obvious temporary/general questions.
+    if len(answer.strip()) < 3:
+
+        return {}
+
+    print("\n[AGENT] Saving useful information to memory...")
+
+    try:
+
+        mcp_memory_save(answer)
+
+        print("[AGENT] Memory saved.")
+
+    except Exception as e:
+
+        print(f"[AGENT] Memory save skipped: {e}")
+
+    return {}
+
+
+# ============================================================
+# CHAT HISTORY SAVE
+# ============================================================
+
+def save_conversation_node(state: AgentState):
+
+    question = state.get("question", "")
+    answer = state.get("answer", "")
+
+    print("\n[AGENT] Saving conversation...")
+
+    try:
+
+        save_chat(
+            question,
+            answer
+        )
+
+        print("[AGENT] Conversation saved.")
+
+    except Exception as e:
+
+        print(f"[AGENT] Conversation save failed: {e}")
+
+    return {}
+
+
+# ============================================================
+# ROUTING FUNCTION
+# ============================================================
+
+def route_after_router(state: AgentState):
+
+    tool = state.get("tool", "general")
+
+    if tool == "memory":
+
+        return "memory"
+
+    if tool == "pdf":
+
+        return "pdf"
+
+    if tool == "chat_history":
+
+        return "chat_history"
+
+    return "general"
+
+
+# ============================================================
+# BUILD GRAPH
 # ============================================================
 
 builder = StateGraph(AgentState)
 
 
-# Add nodes
-
 builder.add_node(
-    "choose_tool",
-    choose_tool_node
+    "router",
+    router_node
 )
 
 builder.add_node(
-    "execute_tool",
-    execute_tool_node
+    "memory",
+    memory_node
 )
 
 builder.add_node(
-    "llm",
-    llm_node
+    "pdf",
+    pdf_node
+)
+
+builder.add_node(
+    "chat_history",
+    chat_history_node
+)
+
+builder.add_node(
+    "general",
+    general_node
+)
+
+builder.add_node(
+    "tool_answer",
+    tool_answer_node
+)
+
+builder.add_node(
+    "memory_save",
+    memory_save_node
+)
+
+builder.add_node(
+    "save_conversation",
+    save_conversation_node
 )
 
 
 # ============================================================
-# GRAPH FLOW
+# EDGES
 # ============================================================
 
+builder.set_entry_point("router")
+
+
+builder.add_conditional_edges(
+    "router",
+    route_after_router,
+    {
+        "memory": "memory",
+        "pdf": "pdf",
+        "chat_history": "chat_history",
+        "general": "general",
+    }
+)
+
+
 builder.add_edge(
-    START,
-    "choose_tool"
+    "memory",
+    "tool_answer"
 )
 
 builder.add_edge(
-    "choose_tool",
-    "execute_tool"
+    "pdf",
+    "tool_answer"
 )
 
 builder.add_edge(
-    "execute_tool",
-    "llm"
+    "chat_history",
+    "tool_answer"
+)
+
+
+builder.add_edge(
+    "general",
+    "memory_save"
 )
 
 builder.add_edge(
-    "llm",
+    "tool_answer",
+    "memory_save"
+)
+
+builder.add_edge(
+    "memory_save",
+    "save_conversation"
+)
+
+builder.add_edge(
+    "save_conversation",
     END
 )
 
 
-# Compile graph
+# ============================================================
+# COMPILE
+# ============================================================
 
 graph = builder.compile()
-
-
-# ============================================================
-# RUN AGENT
-# ============================================================
-
-if __name__ == "__main__":
-
-    print("\n====================================")
-    print("       LANGGRAPH AI AGENT")
-    print("====================================")
-
-    while True:
-
-        question = input(
-            "\nAsk a question "
-            "(type 'exit' to quit): "
-        )
-
-        if question.lower().strip() == "exit":
-
-            print("\nGoodbye!")
-
-            break
-
-        if not question.strip():
-
-            print(
-                "Please enter a question."
-            )
-
-            continue
-
-        try:
-
-            result = graph.invoke({
-
-                "question": question,
-
-                "tool": "",
-
-                "tool_result": "",
-
-                "answer": ""
-
-            })
-
-            print("\n====================================")
-            print("              ANSWER")
-            print("====================================")
-
-            print(
-                result["answer"]
-            )
-
-        except Exception as e:
-
-            print("\nERROR:")
-            print(e)

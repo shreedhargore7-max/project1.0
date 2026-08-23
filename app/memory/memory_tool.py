@@ -2,32 +2,29 @@ import json
 from pathlib import Path
 
 
-# ==========================================
+# ============================================================
 # MEMORY FILE
-# ==========================================
+# ============================================================
 
-MEMORY_DIR = Path(__file__).resolve().parent
-MEMORY_FILE = MEMORY_DIR / "memory.json"
+BASE_DIR = Path(__file__).resolve().parents[2]
+MEMORY_FILE = BASE_DIR / "memory.json"
 
 
-# ==========================================
+# ============================================================
 # LOAD MEMORY
-# ==========================================
+# ============================================================
 
 def load_memory():
+    """
+    Load all long-term memories from memory.json.
+    """
 
     if not MEMORY_FILE.exists():
         return []
 
     try:
-
-        with open(
-            MEMORY_FILE,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            data = json.load(file)
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
         if isinstance(data, list):
             return data
@@ -35,163 +32,193 @@ def load_memory():
         return []
 
     except (json.JSONDecodeError, OSError):
-
         return []
 
 
-# ==========================================
+# ============================================================
 # SAVE MEMORY
-# ==========================================
+# ============================================================
 
 def save_memory(memory):
+    """
+    Save a memory to memory.json.
 
-    with open(
-        MEMORY_FILE,
-        "w",
-        encoding="utf-8"
-    ) as file:
+    Avoids saving duplicate memories.
+    """
 
-        json.dump(
-            memory,
-            file,
-            indent=4,
-            ensure_ascii=False
-        )
-
-
-# ==========================================
-# ADD MEMORY
-# ==========================================
-
-def add_memory(text):
-
-    text = text.strip()
-
-    if not text:
-        return False
-
-    memory = load_memory()
-
-    # Prevent duplicate memories
-    for item in memory:
-
-        if item.get("text", "").lower() == text.lower():
-            return False
-
-    memory.append({
-        "text": text
-    })
-
-    save_memory(memory)
-
-    print("[MEMORY] Saved:", text)
-
-    return True
-
-
-# ==========================================
-# GET ALL MEMORY
-# ==========================================
-
-def get_memory():
-
-    return load_memory()
-
-
-# ==========================================
-# SEARCH MEMORY
-# ==========================================
-
-def search_memory(query):
-
-    memory = load_memory()
+    memory = str(memory).strip()
 
     if not memory:
+        return False
+
+    memories = load_memory()
+
+    if memory not in memories:
+        memories.append(memory)
+
+    try:
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(
+                memories,
+                f,
+                indent=2,
+                ensure_ascii=False
+            )
+
+        return True
+
+    except OSError as e:
+        print(f"[MEMORY ERROR] {e}")
+        return False
+
+
+# ============================================================
+# SEARCH MEMORY
+# ============================================================
+
+def search_memory(query, top_k=5):
+    """
+    Search long-term memory using simple keyword matching.
+
+    This intentionally does NOT require Gemini.
+    """
+
+    memories = load_memory()
+
+    if not memories:
         return []
 
-    query_words = [
-        word.lower()
+    query = str(query).lower().strip()
+
+    if not query:
+        return []
+
+    # --------------------------------------------------------
+    # Extract useful words
+    # --------------------------------------------------------
+
+    stop_words = {
+        "what",
+        "is",
+        "my",
+        "the",
+        "a",
+        "an",
+        "who",
+        "are",
+        "was",
+        "were",
+        "do",
+        "does",
+        "did",
+        "tell",
+        "me",
+        "about",
+        "name",
+        "please",
+        "you",
+        "your",
+        "i",
+        "am",
+        "in",
+        "of",
+        "to",
+        "and",
+        "just"
+    }
+
+    words = [
+        word.strip(".,?!")
         for word in query.split()
-        if len(word) > 2
+        if word.strip(".,?!") not in stop_words
     ]
 
-    results = []
+    # --------------------------------------------------------
+    # Special handling for name questions
+    # --------------------------------------------------------
 
-    for item in memory:
+    if "brother" in query:
+        words.append("brother")
 
-        text = item.get("text", "")
-        text_lower = text.lower()
+    if "favorite" in query:
+        words.append("favorite")
+
+    if "programming" in query:
+        words.append("programming")
+
+    if "language" in query:
+        words.append("language")
+
+    # --------------------------------------------------------
+    # Score memories
+    # --------------------------------------------------------
+
+    scored = []
+
+    for memory in memories:
+
+        memory_text = str(memory)
+        memory_lower = memory_text.lower()
 
         score = 0
 
-        for word in query_words:
-
-            if word in text_lower:
+        for word in words:
+            if word and word in memory_lower:
                 score += 1
 
+        # Direct phrase matching
+        if query in memory_lower:
+            score += 5
+
+        # Important semantic keywords
+        if "brother" in query and "brother" in memory_lower:
+            score += 5
+
+        if "name" in query and "name" in memory_lower:
+            score += 3
+
+        if "programming language" in query:
+            if "programming" in memory_lower or "language" in memory_lower:
+                score += 5
+
         if score > 0:
+            scored.append((score, memory_text))
 
-            results.append({
-                "text": text,
-                "score": score
-            })
+    # --------------------------------------------------------
+    # Sort by relevance
+    # --------------------------------------------------------
 
-    # Highest matching memories first
-    results.sort(
-        key=lambda x: x["score"],
+    scored.sort(
+        key=lambda item: item[0],
         reverse=True
     )
 
     return [
-        item["text"]
-        for item in results
+        memory
+        for score, memory in scored[:top_k]
     ]
 
 
-# ==========================================
-# CLEAR MEMORY
-# ==========================================
-
-def clear_memory():
-
-    save_memory([])
-
-    print("[MEMORY] Cleared.")
-
-
-# ==========================================
-# TEST
-# ==========================================
+# ============================================================
+# DEBUG
+# ============================================================
 
 if __name__ == "__main__":
 
-    print("================================")
-    print("       MEMORY TOOL TEST")
-    print("================================")
-
-    print("\nMemory file:")
+    print("Memory file:")
     print(MEMORY_FILE)
 
-    print("\nSaving test memories...")
+    print("\nCurrent memories:")
 
-    add_memory(
-        "User's name is Shreedhar."
+    memories = load_memory()
+
+    for memory in memories:
+        print("-", memory)
+
+    print("\nSearch test:")
+
+    print(
+        search_memory(
+            "What is my brother name?"
+        )
     )
-
-    add_memory(
-        "User is building a RAG application."
-    )
-
-    print("\nStored memories:")
-
-    for memory in get_memory():
-
-        print("-", memory["text"])
-
-    print("\nSearching memory:")
-
-    results = search_memory("what is my name")
-
-    for result in results:
-
-        print("-", result)

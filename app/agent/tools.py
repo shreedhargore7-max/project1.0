@@ -1,188 +1,261 @@
-"""
-Tools for the LangGraph AI Agent.
+# ============================================================
+# AGENT TOOLS
+# ============================================================
 
-This file connects:
-1. PDF RAG
-2. Web Search
-3. Memory
-"""
+# ------------------------------------------------------------
+# MEMORY
+# ------------------------------------------------------------
 
-
-
-
-import sys
-from pathlib import Path
-
-
-# ==========================================
-# ADD APP DIRECTORY TO PYTHON PATH
-# ==========================================
-
-PROJECT_DIR = Path(__file__).resolve().parents[2]
-APP_DIR = PROJECT_DIR / "app"
-
-if str(APP_DIR) not in sys.path:
-    sys.path.insert(0, str(APP_DIR))
-
-
-# ==========================================
-# IMPORT PROJECT TOOLS
-# ==========================================
-
-from rag.rag_tool import search_pdf
-from live_data.live_tool import web_search
-from memory.memory_tool import add_memory, search_memory
-
-
-# ==========================================
-# PDF RAG TOOL
-# ==========================================
-
-def pdf_search_tool(question: str) -> str:
+def memory_search_tool(query):
     """
-    Search the PDF and return relevant information.
-    """
-
-    print("\n[TOOL] PDF RAG")
-
-    documents = search_pdf(
-        question,
-        top_k=3
-    )
-
-    if not documents:
-        return "No relevant information was found in the PDF."
-
-    context = "\n\n".join(documents)
-
-    return context
-
-
-# ==========================================
-# WEB SEARCH TOOL
-# ==========================================
-
-def web_search_tool(query: str) -> str:
-    """
-    Search the internet using DuckDuckGo.
-    """
-
-    print("\n[TOOL] WEB SEARCH")
-
-    results = web_search(
-        query,
-        max_results=5
-    )
-
-    if not results:
-        return "No web search results were found."
-
-    output = []
-
-    for i, result in enumerate(results, start=1):
-
-        output.append(
-            f"""
-Result {i}
-
-Title: {result.get("title")}
-
-URL: {result.get("url")}
-
-Snippet: {result.get("snippet")}
-"""
-        )
-
-    return "\n".join(output)
-
-
-# ==========================================
-# MEMORY SEARCH TOOL
-# ==========================================
-
-def memory_search_tool(query: str) -> str:
-    """
-    Search stored user memories.
+    Search long-term memory for information relevant to the query.
     """
 
     print("\n[TOOL] MEMORY SEARCH")
 
-    results = search_memory(query)
+    try:
+        from app.memory.memory_tool import search_memory
 
-    if not results:
-        return "No relevant memories were found."
+        results = search_memory(query)
 
-    return "\n".join(
-        f"- {memory}"
-        for memory in results
-    )
+        if results is None:
+            print("[MEMORY] No relevant memories found.")
+            return []
+
+        # Make sure the result is always a list
+        if isinstance(results, str):
+            results = [results]
+
+        results = list(results)
+
+        if not results:
+            print("[MEMORY] No relevant memories found.")
+            return []
+
+        for item in results:
+            print(f"- {item}")
+
+        return results
+
+    except Exception as e:
+
+        print(f"[MEMORY ERROR] {e}")
+
+        return []
 
 
-# ==========================================
-# SAVE MEMORY TOOL
-# ==========================================
+# ------------------------------------------------------------
+# SAVE MEMORY
+# ------------------------------------------------------------
 
-def memory_save_tool(text: str) -> str:
+def memory_save_tool(text):
     """
-    Save information to memory.
+    Save useful user information into long-term memory.
     """
 
-    print("\n[TOOL] SAVE MEMORY")
+    print("\n[TOOL] MEMORY SAVE")
 
-    add_memory(text)
+    if not text or not str(text).strip():
+        print("[MEMORY] Nothing to save.")
+        return None
 
-    return "Memory saved successfully."
+    try:
+        from app.memory.memory_tool import save_memory
+
+        result = save_memory(str(text).strip())
+
+        print("[MEMORY] Saved successfully.")
+
+        return result
+
+    except ImportError as e:
+
+        print(
+            "[MEMORY SAVE ERROR] "
+            "save_memory() was not found in app.memory.memory_tool"
+        )
+
+        print(f"[MEMORY SAVE ERROR] {e}")
+
+        return None
+
+    except Exception as e:
+
+        print(f"[MEMORY SAVE ERROR] {e}")
+
+        return None
 
 
-# ==========================================
-# TEST
-# ==========================================
+# ------------------------------------------------------------
+# PDF SEARCH
+# ------------------------------------------------------------
+
+def pdf_search_tool(query):
+    """
+    Search the indexed PDF/vector database for relevant chunks.
+    """
+
+    print("\n[TOOL] PDF SEARCH")
+
+    try:
+
+        # Your existing RAG search function
+        from app.rag.rag_tool import search_pdf
+
+        results = search_pdf(query)
+
+        if results is None:
+            print("[PDF] No relevant results found.")
+            return []
+
+        # ----------------------------------------------------
+        # Handle different possible return formats
+        # ----------------------------------------------------
+
+        if isinstance(results, str):
+            results = [results]
+
+        elif isinstance(results, dict):
+
+            # Chroma-style result
+            if "documents" in results:
+
+                documents = results["documents"]
+
+                if documents and isinstance(documents[0], list):
+                    documents = documents[0]
+
+                results = documents
+
+            else:
+                results = [str(results)]
+
+        else:
+
+            results = list(results)
+
+        if not results:
+
+            print("[PDF] No relevant results found.")
+
+            return []
+
+        print(
+            f"[PDF] Retrieved {len(results)} relevant chunks."
+        )
+
+        for i, item in enumerate(results, start=1):
+
+            print(f"\n[PDF RESULT {i}]")
+            print(item)
+
+        return results
+
+    except Exception as e:
+
+        print(f"[PDF ERROR] {e}")
+
+        return []
+
+
+# ------------------------------------------------------------
+# CHAT HISTORY SEARCH
+# ------------------------------------------------------------
+
+def chat_history_search_tool(query):
+    """
+    Search previous conversations for information relevant
+    to the current question.
+    """
+
+    print("\n[TOOL] CHAT HISTORY SEARCH")
+
+    try:
+
+        from app.chat_history.chat_history_tool import (
+            search_chat_history
+        )
+
+        results = search_chat_history(query)
+
+        if results is None:
+
+            print(
+                "[CHAT HISTORY] "
+                "No relevant previous chats found."
+            )
+
+            return []
+
+        if isinstance(results, str):
+            results = [results]
+
+        results = list(results)
+
+        if not results:
+
+            print(
+                "[CHAT HISTORY] "
+                "No relevant previous chats found."
+            )
+
+            return []
+
+        print(
+            f"[CHAT HISTORY] "
+            f"Found {len(results)} relevant conversations."
+        )
+
+        for item in results:
+
+            print(item)
+
+        return results
+
+    except Exception as e:
+
+        print(f"[CHAT HISTORY ERROR] {e}")
+
+        return []
+
+
+# ============================================================
+# OPTIONAL: TOOL TESTS
+# ============================================================
 
 if __name__ == "__main__":
 
-    print("====================================")
-    print("          AGENT TOOLS TEST")
-    print("====================================")
+    print("========================================")
+    print("           AGENT TOOLS TEST")
+    print("========================================")
 
-    print("\nTesting PDF tool...")
+    print("\n1. Testing memory search...")
 
-    try:
-        result = pdf_search_tool(
-            "What company is mentioned in the PDF?"
-        )
+    memory_result = memory_search_tool(
+        "what is my name"
+    )
 
-        print("\nPDF TOOL RESULT:")
-        print(result[:500])
+    print("\nMEMORY RESULT:")
+    print(memory_result)
 
-    except Exception as e:
-        print("PDF tool error:", e)
+    print("\n2. Testing PDF search...")
 
-    print("\nTesting memory tool...")
+    pdf_result = pdf_search_tool(
+        "What does the PDF say about RAG?"
+    )
 
-    try:
-        result = memory_search_tool(
-            "Sri Lotus Developers"
-        )
+    print("\nPDF RESULT:")
+    print(pdf_result)
 
-        print("\nMEMORY TOOL RESULT:")
-        print(result)
+    print("\n3. Testing chat history search...")
 
-    except Exception as e:
-        print("Memory tool error:", e)
+    history_result = chat_history_search_tool(
+        "what is my name"
+    )
 
-    print("\nTesting web tool...")
+    print("\nCHAT HISTORY RESULT:")
+    print(history_result)
 
-    try:
-        result = web_search_tool(
-            "Sri Lotus Developers latest news"
-        )
-
-        print("\nWEB TOOL RESULT:")
-        print(result[:1000])
-
-    except Exception as e:
-        print("Web tool error:", e)
-
-    print("\n====================================")
-    print("             TEST COMPLETE")
-    print("====================================")
+    print("\n========================================")
+    print("           TEST COMPLETED")
+    print("========================================")

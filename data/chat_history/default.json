@@ -1,0 +1,14 @@
+[
+  {
+    "user": "Hello, my name is Shreedhar",
+    "assistant": "Hello Shreedhar!"
+  },
+  {
+    "user": "My favorite programming language is Python",
+    "assistant": "I couldn't generate an answer right now."
+  },
+  {
+    "user": "Explain machine learning",
+    "assistant": "Gemini API quota is currently exhausted. Please try again after the quota resets."
+  }
+]

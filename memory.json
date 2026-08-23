@@ -1,0 +1,7 @@
+[
+  "My favorite programming language is Python",
+  "What is my favorite programming language?",
+  "What is my favorite programming language?\nMy favorite programming language is Python",
+  "What is my favorite programming language?\nWhat is my favorite programming language?\nMy favorite programming language is Python\nMy favorite programming language is Python",
+  "Sure! Machine learning is a way for computers to learn from data and improve their performance over time without being explicitly programmed. \n\nImagine you have a pet that you want to train. Instead of telling it exactly what to do each time, you show it examples of what you want. Over time, it learns to recognize commands and respond correctly. Similarly, in machine learning, we provide a computer with lots of examples (data), and it finds patterns and makes predictions based on that information.\n\nFor instance, if you wanted to teach a computer to recognize pictures of cats, you would show it many pictures of cats and say, “This is a cat.” After seeing enough examples, the computer learns what features make a cat a cat and can then identify new pictures on its own.\n\nSo, in short, machine learning is like teaching a computer to learn from experience!"
+]
