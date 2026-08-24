@@ -15,6 +15,18 @@ __pycache__/
 
 
 
+.env
+.venv/
+__pycache__/
+*.pyc
+
+chroma_db/
+data/chat_history.json
+memory.json
+
+
+
+
 
 
 

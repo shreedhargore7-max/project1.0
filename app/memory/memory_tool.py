@@ -15,15 +15,18 @@ MEMORY_FILE = BASE_DIR / "memory.json"
 # ============================================================
 
 def load_memory():
-    """
-    Load all long-term memories from memory.json.
-    """
 
     if not MEMORY_FILE.exists():
         return []
 
     try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+
+        with open(
+            MEMORY_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
             data = json.load(f)
 
         if isinstance(data, list):
@@ -31,7 +34,11 @@ def load_memory():
 
         return []
 
-    except (json.JSONDecodeError, OSError):
+    except (
+        json.JSONDecodeError,
+        OSError
+    ):
+
         return []
 
 
@@ -40,11 +47,6 @@ def load_memory():
 # ============================================================
 
 def save_memory(memory):
-    """
-    Save a memory to memory.json.
-
-    Avoids saving duplicate memories.
-    """
 
     memory = str(memory).strip()
 
@@ -54,10 +56,17 @@ def save_memory(memory):
     memories = load_memory()
 
     if memory not in memories:
+
         memories.append(memory)
 
     try:
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+
+        with open(
+            MEMORY_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
             json.dump(
                 memories,
                 f,
@@ -68,7 +77,11 @@ def save_memory(memory):
         return True
 
     except OSError as e:
-        print(f"[MEMORY ERROR] {e}")
+
+        print(
+            f"[MEMORY ERROR] {e}"
+        )
+
         return False
 
 
@@ -77,11 +90,6 @@ def save_memory(memory):
 # ============================================================
 
 def search_memory(query, top_k=5):
-    """
-    Search long-term memory using simple keyword matching.
-
-    This intentionally does NOT require Gemini.
-    """
 
     memories = load_memory()
 
@@ -92,10 +100,6 @@ def search_memory(query, top_k=5):
 
     if not query:
         return []
-
-    # --------------------------------------------------------
-    # Extract useful words
-    # --------------------------------------------------------
 
     stop_words = {
         "what",
@@ -124,7 +128,11 @@ def search_memory(query, top_k=5):
         "of",
         "to",
         "and",
-        "just"
+        "just",
+        "we",
+        "our",
+        "before",
+        "currently"
     }
 
     words = [
@@ -132,26 +140,6 @@ def search_memory(query, top_k=5):
         for word in query.split()
         if word.strip(".,?!") not in stop_words
     ]
-
-    # --------------------------------------------------------
-    # Special handling for name questions
-    # --------------------------------------------------------
-
-    if "brother" in query:
-        words.append("brother")
-
-    if "favorite" in query:
-        words.append("favorite")
-
-    if "programming" in query:
-        words.append("programming")
-
-    if "language" in query:
-        words.append("language")
-
-    # --------------------------------------------------------
-    # Score memories
-    # --------------------------------------------------------
 
     scored = []
 
@@ -163,14 +151,13 @@ def search_memory(query, top_k=5):
         score = 0
 
         for word in words:
+
             if word and word in memory_lower:
                 score += 1
 
-        # Direct phrase matching
         if query in memory_lower:
             score += 5
 
-        # Important semantic keywords
         if "brother" in query and "brother" in memory_lower:
             score += 5
 
@@ -178,15 +165,31 @@ def search_memory(query, top_k=5):
             score += 3
 
         if "programming language" in query:
-            if "programming" in memory_lower or "language" in memory_lower:
+
+            if (
+                "programming" in memory_lower
+                or
+                "language" in memory_lower
+            ):
+
                 score += 5
 
-        if score > 0:
-            scored.append((score, memory_text))
+        if (
+            "building" in query
+            and
+            "building" in memory_lower
+        ):
 
-    # --------------------------------------------------------
-    # Sort by relevance
-    # --------------------------------------------------------
+            score += 5
+
+        if score > 0:
+
+            scored.append(
+                (
+                    score,
+                    memory_text
+                )
+            )
 
     scored.sort(
         key=lambda item: item[0],
@@ -200,25 +203,34 @@ def search_memory(query, top_k=5):
 
 
 # ============================================================
-# DEBUG
+# TEST
 # ============================================================
 
 if __name__ == "__main__":
 
-    print("Memory file:")
+    print(
+        "Memory file:"
+    )
+
     print(MEMORY_FILE)
 
-    print("\nCurrent memories:")
+    print(
+        "\nCurrent memories:"
+    )
 
-    memories = load_memory()
+    for memory in load_memory():
 
-    for memory in memories:
-        print("-", memory)
+        print(
+            "-",
+            memory
+        )
 
-    print("\nSearch test:")
+    print(
+        "\nSearch:"
+    )
 
     print(
         search_memory(
-            "What is my brother name?"
+            "What am I building?"
         )
     )

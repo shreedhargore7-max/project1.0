@@ -1,69 +1,101 @@
-import os
-import requests
-from dotenv import load_dotenv
+# ============================================================
+# OPENROUTER CLIENT
+# ============================================================
 
-load_dotenv()
+import os
+from dotenv import load_dotenv
+from openai import OpenAI
+
+
+# ============================================================
+# LOAD ENVIRONMENT VARIABLES
+# ============================================================
+
+load_dotenv(
+    os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        ".env"
+    )
+)
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 if not OPENROUTER_API_KEY:
-    raise ValueError("OPENROUTER_API_KEY not found in .env")
+    raise ValueError(
+        "OPENROUTER_API_KEY not found in app/.env"
+    )
 
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# ============================================================
+# OPENROUTER CLIENT
+# ============================================================
 
-MODEL = "openai/gpt-4o-mini"
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
 
 
-def generate_answer(prompt: str) -> str:
-    """
-    Generate an answer using OpenRouter.
+# ============================================================
+# FREE MODEL
+# ============================================================
 
-    This keeps the same function name as the old Gemini client,
-    so the rest of the agent does not need to change.
-    """
+MODEL = "openrouter/free"
+
+
+# ============================================================
+# GENERATE ANSWER
+# ============================================================
+
+def generate_answer(
+    prompt: str,
+    max_tokens: int = 2048
+) -> str:
 
     print("[OPENROUTER] Generating answer...")
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    data = {
-        "model": MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
-        "temperature": 0.7,
-    }
+    print(f"[OPENROUTER] Model: {MODEL}")
+    print(f"[OPENROUTER] Max tokens: {max_tokens}")
 
     try:
-        response = requests.post(
-            OPENROUTER_URL,
-            headers=headers,
-            json=data,
-            timeout=60,
+
+        response = client.chat.completions.create(
+            model=MODEL,
+
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+
+            max_tokens=max_tokens,
+
+            temperature=0.7,
         )
 
-        if response.status_code != 200:
-            print("[OPENROUTER] API error:")
-            print(response.text)
+        if not response.choices:
+            return "No answer was generated."
 
-            return "I couldn't generate an answer right now."
+        answer = response.choices[0].message.content
 
-        result = response.json()
-
-        answer = result["choices"][0]["message"]["content"]
+        if not answer:
+            return "No answer was generated."
 
         print("[OPENROUTER] Answer generated successfully.")
 
         return answer.strip()
 
     except Exception as e:
-        print(f"[OPENROUTER] Error: {e}")
 
-        return "I couldn't generate an answer right now."
+        print("[OPENROUTER] API error:")
+        print(str(e))
+
+        return (
+            "I couldn't generate the answer because "
+            f"the AI service returned an error: {e}"
+        )
