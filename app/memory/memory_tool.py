@@ -1,12 +1,18 @@
+# ============================================================
+# MEMORY TOOL
+# ============================================================
+
 import json
+import re
 from pathlib import Path
 
 
 # ============================================================
-# MEMORY FILE
+# PATH
 # ============================================================
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+
 MEMORY_FILE = BASE_DIR / "memory.json"
 
 
@@ -34,30 +40,21 @@ def load_memory():
 
         return []
 
-    except (
-        json.JSONDecodeError,
-        OSError
-    ):
+    except Exception as e:
+
+        print(
+            "[MEMORY] Load error:",
+            e
+        )
 
         return []
 
 
 # ============================================================
-# SAVE MEMORY
+# SAVE MEMORY FILE
 # ============================================================
 
 def save_memory(memory):
-
-    memory = str(memory).strip()
-
-    if not memory:
-        return False
-
-    memories = load_memory()
-
-    if memory not in memories:
-
-        memories.append(memory)
 
     try:
 
@@ -68,7 +65,7 @@ def save_memory(memory):
         ) as f:
 
             json.dump(
-                memories,
+                memory,
                 f,
                 indent=2,
                 ensure_ascii=False
@@ -76,161 +73,335 @@ def save_memory(memory):
 
         return True
 
-    except OSError as e:
+    except Exception as e:
 
         print(
-            f"[MEMORY ERROR] {e}"
+            "[MEMORY] Save error:",
+            e
         )
 
         return False
 
 
 # ============================================================
-# SEARCH MEMORY
+# CLEAN MEMORY TEXT
 # ============================================================
 
-def search_memory(query, top_k=5):
+def clean_memory_text(text):
 
-    memories = load_memory()
+    if not text:
+        return ""
 
-    if not memories:
-        return []
+    text = str(text).strip()
 
-    query = str(query).lower().strip()
+    # Remove excessive whitespace
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
 
-    if not query:
-        return []
+    return text.strip()
 
-    stop_words = {
-        "what",
-        "is",
-        "my",
-        "the",
-        "a",
-        "an",
-        "who",
-        "are",
-        "was",
-        "were",
-        "do",
-        "does",
-        "did",
-        "tell",
-        "me",
-        "about",
-        "name",
-        "please",
-        "you",
-        "your",
-        "i",
-        "am",
-        "in",
-        "of",
-        "to",
-        "and",
-        "just",
-        "we",
-        "our",
-        "before",
-        "currently"
-    }
 
-    words = [
-        word.strip(".,?!")
-        for word in query.split()
-        if word.strip(".,?!") not in stop_words
+# ============================================================
+# SHOULD SAVE?
+# ============================================================
+
+def should_save_memory(text):
+
+    if not text:
+        return False
+
+    text = clean_memory_text(text)
+
+    lower = text.lower()
+
+    # --------------------------------------------------------
+    # NEVER SAVE API / SYSTEM ERRORS
+    # --------------------------------------------------------
+
+    blocked = [
+
+        "error code:",
+        "rate limit exceeded",
+        "api error",
+        "traceback",
+        "exception",
+        "internal server error",
+        "something went wrong",
+        "couldn't generate the answer",
+        "couldn't generate an answer",
+        "ai service returned an error",
+        "tool error",
+        "memory search failed",
+        "pdf search failed",
+        "razorpay",
+        "mcp result",
+        "tool used",
+        "amount_due",
+        "amount_paid",
+        "created_at",
+        "order_",
+        "pay_",
+        "rfnd_",
+        "plink_",
     ]
 
-    scored = []
+    for item in blocked:
+
+        if item in lower:
+            return False
+
+    return True
+
+
+# ============================================================
+# EXTRACT IMPORTANT MEMORY
+# ============================================================
+
+def extract_memory(text):
+
+    memories = []
+
+    if not text:
+        return memories
+
+    text = clean_memory_text(text)
+
+    # --------------------------------------------------------
+    # NAME
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\bmy name is\s+([A-Za-z][A-Za-z\s'-]{1,40})",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        name = match.group(1).strip()
+
+        memories.append(
+            f"User's name is {name}."
+        )
+
+
+    # --------------------------------------------------------
+    # LEARNING
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\b(?:i am|i'm)\s+(?:learning|studying)\s+(.+?)(?:[.!?]|$)",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        subject = match.group(1).strip()
+
+        memories.append(
+            f"User is learning {subject}."
+        )
+
+
+    # --------------------------------------------------------
+    # BUILDING
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\b(?:i am|i'm)\s+building\s+(.+?)(?:[.!?]|$)",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        project = match.group(1).strip()
+
+        memories.append(
+            f"User is building {project}."
+        )
+
+
+    # --------------------------------------------------------
+    # WORKING ON
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\b(?:i am|i'm)\s+working on\s+(.+?)(?:[.!?]|$)",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        project = match.group(1).strip()
+
+        memories.append(
+            f"User is working on {project}."
+        )
+
+
+    # --------------------------------------------------------
+    # FAVORITE PROGRAMMING LANGUAGE
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\bmy (?:favorite|favourite) programming language is\s+(.+?)(?:[.!?]|$)",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        language = match.group(1).strip()
+
+        memories.append(
+            f"User's favorite programming language is {language}."
+        )
+
+
+    return memories
+
+
+# ============================================================
+# ADD MEMORY
+# ============================================================
+
+def add_memory(text):
+
+    if not should_save_memory(text):
+
+        print(
+            "[MEMORY] Rejected temporary/system content."
+        )
+
+        return False
+
+    memories = extract_memory(text)
+
+    if not memories:
+
+        print(
+            "[MEMORY] No important personal information detected."
+        )
+
+        return False
+
+    existing = load_memory()
+
+    changed = False
 
     for memory in memories:
 
-        memory_text = str(memory)
-        memory_lower = memory_text.lower()
+        duplicate = False
 
-        score = 0
-
-        for word in words:
-
-            if word and word in memory_lower:
-                score += 1
-
-        if query in memory_lower:
-            score += 5
-
-        if "brother" in query and "brother" in memory_lower:
-            score += 5
-
-        if "name" in query and "name" in memory_lower:
-            score += 3
-
-        if "programming language" in query:
+        for old in existing:
 
             if (
-                "programming" in memory_lower
-                or
-                "language" in memory_lower
+                isinstance(old, str)
+                and old.strip().lower()
+                == memory.strip().lower()
             ):
 
-                score += 5
+                duplicate = True
+                break
 
-        if (
-            "building" in query
-            and
-            "building" in memory_lower
-        ):
+        if not duplicate:
 
-            score += 5
+            existing.append(memory)
+
+            changed = True
+
+            print(
+                "[MEMORY] Saved:",
+                memory
+            )
+
+    if changed:
+
+        save_memory(existing)
+
+    return changed
+
+
+# ============================================================
+# SEARCH MEMORY
+# ============================================================
+
+def search_memory(query):
+
+    memory = load_memory()
+
+    if not memory:
+        return []
+
+
+    query = clean_memory_text(query)
+
+    query_words = set(
+        word.lower()
+        for word in re.findall(
+            r"[a-zA-Z0-9']+",
+            query
+        )
+        if len(word) > 2
+    )
+
+
+    results = []
+
+
+    for item in memory:
+
+        if not isinstance(item, str):
+            continue
+
+        item_words = set(
+            word.lower()
+            for word in re.findall(
+                r"[a-zA-Z0-9']+",
+                item
+            )
+            if len(word) > 2
+        )
+
+        score = len(
+            query_words & item_words
+        )
 
         if score > 0:
 
-            scored.append(
-                (
-                    score,
-                    memory_text
-                )
+            results.append(
+                (score, item)
             )
 
-    scored.sort(
-        key=lambda item: item[0],
+
+    results.sort(
+        key=lambda x: x[0],
         reverse=True
     )
 
+
     return [
-        memory
-        for score, memory in scored[:top_k]
+        item
+        for score, item in results
     ]
 
 
 # ============================================================
-# TEST
+# MEMORY TOOL
 # ============================================================
 
-if __name__ == "__main__":
+def memory_tool(query):
+
+    results = search_memory(query)
 
     print(
-        "Memory file:"
+        f"[MEMORY] Found {len(results)} memories."
     )
 
-    print(MEMORY_FILE)
-
-    print(
-        "\nCurrent memories:"
-    )
-
-    for memory in load_memory():
-
-        print(
-            "-",
-            memory
-        )
-
-    print(
-        "\nSearch:"
-    )
-
-    print(
-        search_memory(
-            "What am I building?"
-        )
-    )
+    return results

@@ -3,69 +3,64 @@
 # ============================================================
 #
 # Handles:
-#   1. Memory
-#   2. PDF / RAG
-#   3. Chat History
-#   4. Razorpay MCP
-#   5. General conversation
 #
-# Architecture:
-#
-# User
-#   ↓
-# Router
-#   ↓
-# Selected tool
-#   ↓
-# Tool execution
-#   ↓
-# Gemini / OpenRouter
-#   ↓
-# Final answer
+# 1. General AI
+# 2. Long-term Memory
+# 3. PDF / RAG
+# 4. Chat History
+# 5. Razorpay MCP
 #
 # ============================================================
 
+import re
 
 from typing import TypedDict
 
 from langgraph.graph import StateGraph, END
 
+from app.monitoring.logger import create_request_id, log_event
+
 
 # ============================================================
-# GEMINI / OPENROUTER
+# AI
 # ============================================================
 
 from app.chat.gemini_client import generate_answer
 
 
 # ============================================================
-# MCP TOOLS
+# LOCAL MEMORY
+# ============================================================
+
+from app.memory.memory_tool import (
+    memory_tool,
+    add_memory,
+)
+
+
+# ============================================================
+# PDF / RAG
+# ============================================================
+
+from app.rag.rag_tool import (
+    search_pdf,
+)
+
+
+# ============================================================
+# CHAT HISTORY
 # ============================================================
 
 from app.agent.mcp_tools import (
-
-    # --------------------------------------------------------
-    # Memory
-    # --------------------------------------------------------
-
-    mcp_memory_search,
-    mcp_memory_save,
-
-    # --------------------------------------------------------
-    # Chat history
-    # --------------------------------------------------------
-
     mcp_chat_history_search,
+)
 
-    # --------------------------------------------------------
-    # PDF / RAG
-    # --------------------------------------------------------
 
-    mcp_pdf_search,
+# ============================================================
+# RAZORPAY MCP
+# ============================================================
 
-    # --------------------------------------------------------
-    # Razorpay
-    # --------------------------------------------------------
+from app.agent.mcp_tools import (
 
     mcp_razorpay_fetch_all_payments,
     mcp_razorpay_fetch_payment,
@@ -76,21 +71,28 @@ from app.agent.mcp_tools import (
     mcp_razorpay_fetch_all_refunds,
     mcp_razorpay_fetch_refund,
 
-    mcp_razorpay_create_payment_link,
     mcp_razorpay_fetch_all_payment_links,
 
     mcp_razorpay_fetch_settlements,
     mcp_razorpay_fetch_settlement,
+
+    mcp_razorpay_create_order,
+    mcp_razorpay_create_payment_link,
+
+    mcp_razorpay_update_order,
+    mcp_razorpay_capture_payment,
 )
 
 
 # ============================================================
-# AGENT STATE
+# STATE
 # ============================================================
 
 class AgentState(TypedDict, total=False):
 
     question: str
+
+    request_id: str
 
     chat_history: str
 
@@ -99,106 +101,382 @@ class AgentState(TypedDict, total=False):
     tool: str
 
     tool_result: str
+    last_tool_result: str
 
     answer: str
+
+    confirmation_required: bool
+
+    pending_action: str
+
+    pending_args: dict
+
+    previous_tool: str
+
+
+# ============================================================
+# AMOUNT
+# ============================================================
+
+def extract_amount(question):
+
+    patterns = [
+
+        r"₹\s*([\d,]+(?:\.\d+)?)",
+
+        r"([\d,]+(?:\.\d+)?)\s*"
+        r"(?:rupees|rs\.?|inr)",
+
+        r"(?:for|amount(?:\s+of)?)\s+"
+        r"₹?\s*([\d,]+(?:\.\d+)?)",
+    ]
+
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            question.lower()
+        )
+
+        if match:
+
+            value = match.group(1)
+
+            value = value.replace(
+                ",",
+                ""
+            )
+
+            try:
+
+                amount = float(value)
+
+                if amount.is_integer():
+
+                    return int(amount)
+
+                return amount
+
+            except ValueError:
+
+                pass
+
+
+    return None
+
+
+# ============================================================
+# ORDER ID
+# ============================================================
+
+def extract_order_id(question):
+
+    match = re.search(
+        r"\border_[A-Za-z0-9]+\b",
+        question
+    )
+
+    if match:
+
+        return match.group(0)
+
+    return None
+
+
+# ============================================================
+# PAYMENT ID
+# ============================================================
+
+def extract_payment_id(question):
+
+    match = re.search(
+        r"\bpay_[A-Za-z0-9]+\b",
+        question
+    )
+
+    if match:
+
+        return match.group(0)
+
+    return None
+
+
+# ============================================================
+# REFUND ID
+# ============================================================
+
+def extract_refund_id(question):
+
+    match = re.search(
+        r"\brfnd_[A-Za-z0-9]+\b",
+        question
+    )
+
+    if match:
+
+        return match.group(0)
+
+    return None
+
+
+# ============================================================
+# RECEIPT
+# ============================================================
+
+def extract_receipt(question):
+
+    match = re.search(
+        r"(?:receipt|receipt\s*(?:id|number)?)"
+        r"[\s:=_-]*([A-Za-z0-9_-]+)",
+        question,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        return match.group(1)
+
+    return None
+
+
+# ============================================================
+# DESCRIPTION
+# ============================================================
+
+def extract_description(question):
+
+    if "for testing" in question.lower():
+
+        return "Testing payment link"
+
+
+    match = re.search(
+        r"(?:description|described as)"
+        r"\s*[:=]?\s*(.+)",
+        question,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        description = match.group(1).strip()
+
+        if description:
+
+            return description
+
+
+    return "Testing payment link"
 
 
 # ============================================================
 # ROUTER
 # ============================================================
 
+def infer_previous_tool(state: AgentState):
+    """Infer the previous tool from explicit state or recent chat history."""
+
+    previous_tool = state.get("previous_tool", "")
+
+    if previous_tool in {
+        "memory",
+        "pdf",
+        "chat_history",
+        "razorpay",
+        "general",
+    }:
+        return previous_tool
+
+    history = state.get("chat_history", "") or ""
+    h = history.lower()
+
+    # Most specific signals first.
+    if any(x in h for x in [
+        "razorpay",
+        "order",
+        "payment",
+        "refund",
+        "settlement",
+        "payment link",
+        "pay_",
+        "order_",
+        "rfnd_",
+    ]):
+        return "razorpay"
+
+    if any(x in h for x in [
+        "pdf",
+        "document",
+        "according to the document",
+        "according to pdf",
+    ]):
+        return "pdf"
+
+    if any(x in h for x in [
+        "my name",
+        "what do you know about me",
+        "what am i building",
+        "remember",
+        "memory",
+    ]):
+        return "memory"
+
+    if any(x in h for x in [
+        "previous conversation",
+        "previous chat",
+        "earlier conversation",
+        "chat history",
+        "what did we discuss",
+    ]):
+        return "chat_history"
+
+    return ""
+
+
+def is_contextual_follow_up(question: str) -> bool:
+    q = question.lower().strip()
+
+    follow_up_keywords = [
+        "how many",
+        "how much",
+        "which one",
+        "which is",
+        "what is its",
+        "what's its",
+        "its amount",
+        "its status",
+        "its receipt",
+        "the latest",
+        "latest one",
+        "first one",
+        "last one",
+        "that order",
+        "that payment",
+        "that refund",
+        "those orders",
+        "those payments",
+        "those refunds",
+        "show it",
+        "show that",
+        "tell me more",
+        "what about it",
+    ]
+
+    return any(keyword in q for keyword in follow_up_keywords)
+
+
 def router_node(state: AgentState):
+    request_id = state.get("request_id") or create_request_id()
+    state["request_id"] = request_id
+    log_event(request_id, "REQUEST_STARTED", "Agent request started")
 
-    question = state.get(
-        "question",
-        ""
-    ).strip()
-
+    question = state.get("question", "").strip()
     q = question.lower()
 
-    print("\n========================================")
+    print()
+    print("========================================")
     print("        INTELLIGENT AGENT")
     print("========================================")
+    print("[ROUTER] Question:", question)
 
-    print("\n[ROUTER] Question:")
-    print(question)
+    previous_tool = infer_previous_tool(state)
+    last_tool_result = state.get("last_tool_result", "")
+
+    # ========================================================
+    # CONTEXT-AWARE FOLLOW-UP
+    # ========================================================
+    # Put this BEFORE normal keyword routing. A question such as
+    # "how much?" contains no Razorpay keyword, so we use the
+    # previous tool to keep the conversation on the same data source.
+
+    if is_contextual_follow_up(question) and previous_tool:
+        selected = previous_tool
+        print("[ROUTER] Context follow-up detected.")
+        print("[ROUTER] Previous tool:", previous_tool)
 
     # ========================================================
     # RAZORPAY
     # ========================================================
-
-    razorpay_keywords = [
-
-        "razorpay",
-
-        "payment",
-        "payments",
-
-        "order",
-        "orders",
-
-        "refund",
-        "refunds",
-
-        "settlement",
-        "settlements",
-
-        "payment link",
-        "payment links",
-
-        "qr code",
-        "qr codes",
-
-        "payout",
-        "payouts",
-    ]
-
-    if any(
+    elif any(
         keyword in q
-        for keyword in razorpay_keywords
+        for keyword in [
+            "razorpay",
+            "payment",
+            "payments",
+            "order",
+            "orders",
+            "refund",
+            "refunds",
+            "settlement",
+            "settlements",
+            "payment link",
+            "payment links",
+            "capture payment",
+            "pay_",
+            "order_",
+            "rfnd_",
+        ]
     ):
-
         selected = "razorpay"
 
     # ========================================================
     # PDF / RAG
     # ========================================================
-
     elif any(
         keyword in q
         for keyword in [
             "pdf",
             "document",
-            "file",
+            "uploaded document",
+            "uploaded pdf",
+            "this document",
+            "this pdf",
             "according to the document",
+            "according to the pdf",
             "according to pdf",
             "what does the document say",
+            "what does the pdf say",
+            "what is mentioned in the document",
+            "what is mentioned in the pdf",
+            "what is written in the document",
+            "what is written in the pdf",
+            "summarize the document",
+            "summarise the document",
+            "summarize the pdf",
+            "summarise the pdf",
+            "explain the document",
+            "explain the pdf",
+            "from the document",
+            "from the pdf",
+            "in the document",
+            "in the pdf",
         ]
     ):
-
         selected = "pdf"
 
     # ========================================================
     # MEMORY
     # ========================================================
-
     elif any(
         keyword in q
         for keyword in [
+            "what is my name",
+            "what's my name",
+            "who am i",
+            "what am i building",
+            "what am i making",
+            "what do you know about me",
+            "what do you remember about me",
             "remember",
             "memory",
-            "what am i building",
-            "what do you know about me",
-            "what did i tell you",
         ]
     ):
-
         selected = "memory"
 
     # ========================================================
     # CHAT HISTORY
     # ========================================================
-
     elif any(
         keyword in q
         for keyword in [
@@ -211,23 +489,15 @@ def router_node(state: AgentState):
             "what we discussed",
         ]
     ):
-
         selected = "chat_history"
 
-    # ========================================================
-    # GENERAL
-    # ========================================================
-
     else:
-
         selected = "general"
 
-    print(
-        f"[ROUTER] Selected tool: {selected}"
-    )
+    print("[ROUTER] Selected:", selected)
+    log_event(request_id, "ROUTER_SELECTED", selected)
 
     state["tool"] = selected
-
     return state
 
 
@@ -237,38 +507,62 @@ def router_node(state: AgentState):
 
 def memory_node(state: AgentState):
 
-    print("\n[AGENT] Memory search")
-
     question = state.get(
         "question",
         ""
     )
 
+
+    request_id = state.get("request_id") or create_request_id()
+    state["request_id"] = request_id
+    log_event(request_id, "MEMORY_SEARCH_STARTED", "Local memory search")
+
+    print(
+        "[AGENT] Local memory search"
+    )
+
+
     try:
 
-        result = mcp_memory_search(
+        results = memory_tool(
             question
         )
 
-        state["memory_context"] = str(
-            result
-        )
 
-        state["tool_result"] = str(
-            result
-        )
+        if results:
+
+            result = "\n".join(
+                str(x)
+                for x in results
+            )
+
+        else:
+
+            result = (
+                "No relevant memories found."
+            )
+
+
+        state["memory_context"] = result
+
+        state["tool_result"] = result
+        log_event(request_id, "MEMORY_SEARCH_COMPLETED", "Memory search completed")
+
 
     except Exception as e:
 
+        log_event(request_id, "ERROR", f"Memory search failed: {e}")
         print(
-            f"[MEMORY ERROR] {e}"
+            "[MEMORY ERROR]",
+            e
         )
 
         state["memory_context"] = ""
 
         state["tool_result"] = (
-            f"Memory search failed: {e}"
+            "No relevant memories found."
         )
+
 
     return state
 
@@ -279,32 +573,45 @@ def memory_node(state: AgentState):
 
 def pdf_node(state: AgentState):
 
-    print("\n[AGENT] PDF / RAG search")
-
     question = state.get(
         "question",
         ""
     )
 
+
+    request_id = state.get("request_id") or create_request_id()
+    state["request_id"] = request_id
+    log_event(request_id, "PDF_SEARCH_STARTED", "PDF/RAG search")
+
+    print(
+        "[AGENT] PDF / RAG search"
+    )
+
+
     try:
 
-        result = mcp_pdf_search(
+        result = search_pdf(
             question
         )
+
 
         state["tool_result"] = str(
             result
         )
+        log_event(request_id, "PDF_SEARCH_COMPLETED", "PDF/RAG search completed")
+
 
     except Exception as e:
 
         print(
-            f"[PDF ERROR] {e}"
+            "[PDF ERROR]",
+            e
         )
 
         state["tool_result"] = (
-            f"PDF search failed: {e}"
+            "No relevant PDF information found."
         )
+
 
     return state
 
@@ -315,14 +622,20 @@ def pdf_node(state: AgentState):
 
 def chat_history_node(state: AgentState):
 
-    print(
-        "\n[AGENT] Chat history search"
-    )
-
     question = state.get(
         "question",
         ""
     )
+
+
+    request_id = state.get("request_id") or create_request_id()
+    state["request_id"] = request_id
+    log_event(request_id, "CHAT_HISTORY_SEARCH_STARTED", "Chat history search")
+
+    print(
+        "[AGENT] Chat history search"
+    )
+
 
     try:
 
@@ -330,19 +643,25 @@ def chat_history_node(state: AgentState):
             question
         )
 
+
         state["tool_result"] = str(
             result
         )
+        log_event(request_id, "CHAT_HISTORY_SEARCH_COMPLETED", "Chat history search completed")
+
 
     except Exception as e:
 
+        log_event(request_id, "ERROR", f"Chat history search failed: {e}")
         print(
-            f"[CHAT HISTORY ERROR] {e}"
+            "[CHAT HISTORY ERROR]",
+            e
         )
 
         state["tool_result"] = (
-            f"Chat history search failed: {e}"
+            "No previous conversation found."
         )
+
 
     return state
 
@@ -353,7 +672,9 @@ def chat_history_node(state: AgentState):
 
 def razorpay_node(state: AgentState):
 
-    print("\n[AGENT] Razorpay MCP")
+    request_id = state.get("request_id") or create_request_id()
+    state["request_id"] = request_id
+    log_event(request_id, "RAZORPAY_NODE_STARTED", "Razorpay operation requested")
 
     question = state.get(
         "question",
@@ -361,6 +682,14 @@ def razorpay_node(state: AgentState):
     ).strip()
 
     q = question.lower()
+
+
+    state["confirmation_required"] = False
+
+    state["pending_action"] = ""
+
+    state["pending_args"] = {}
+
 
     # ========================================================
     # CREATE PAYMENT LINK
@@ -375,123 +704,350 @@ def razorpay_node(state: AgentState):
         and "payment link" in q
     ):
 
-        print(
-            "[RAZORPAY] Action: create_payment_link"
+        amount = extract_amount(
+            question
         )
 
-        # ----------------------------------------------------
-        # IMPORTANT
-        # ----------------------------------------------------
-        # We currently do not guess the amount.
-        # The agent should only create a payment link when
-        # an amount is explicitly supplied.
-        #
-        # For now, return a clear instruction.
-        # ----------------------------------------------------
+
+        if amount is None:
+
+            state["tool_result"] = (
+                "Please provide the payment-link amount."
+            )
+
+            return state
+
+
+        description = extract_description(
+            question
+        )
+
+
+        state["confirmation_required"] = True
+
+        state["pending_action"] = (
+            "create_payment_link"
+        )
+
+        state["pending_args"] = {
+
+            "amount": amount,
+
+            "currency": "INR",
+
+            "description": description,
+        }
+
+
+        state["tool"] = (
+            "razorpay.create_payment_link"
+        )
 
         state["tool_result"] = (
-            "To create a Razorpay payment link, "
-            "please provide the amount and description. "
-            "Example: Create a payment link for ₹500 "
-            "for a laptop."
+            "CONFIRMATION_REQUIRED"
         )
+        log_event(request_id, "RAZORPAY_CONFIRMATION_REQUIRED", state["pending_action"])
 
         return state
 
+
     # ========================================================
-    # FETCH SPECIFIC PAYMENT
+    # CREATE ORDER
     # ========================================================
 
     if (
-        "payment" in q
-        and "link" not in q
-        and any(
-            x in q
-            for x in [
-                "payment id",
-                "payment_id",
-                "paymentid",
-            ]
+        (
+            "create" in q
+            or "make" in q
+            or "generate" in q
+            or "add" in q
         )
+        and "order" in q
     ):
 
-        print(
-            "[RAZORPAY] Action: fetch_payment"
+        amount = extract_amount(
+            question
+        )
+
+        receipt = extract_receipt(
+            question
+        )
+
+
+        if amount is None:
+
+            state["tool_result"] = (
+                "Please provide the order amount."
+            )
+
+            return state
+
+
+        if receipt is None:
+
+            state["tool_result"] = (
+                "Please provide the receipt."
+            )
+
+            return state
+
+
+        state["confirmation_required"] = True
+
+        state["pending_action"] = (
+            "create_order"
+        )
+
+        state["pending_args"] = {
+
+            "amount": amount,
+
+            "currency": "INR",
+
+            "receipt": receipt,
+        }
+
+
+        state["tool"] = (
+            "razorpay.create_order"
         )
 
         state["tool_result"] = (
-            "Please provide the Razorpay payment ID. "
-            "Example: Show payment pay_XXXXXXXXXXXXXX"
+            "CONFIRMATION_REQUIRED"
         )
 
         return state
 
+
     # ========================================================
-    # FETCH SPECIFIC ORDER
+    # CAPTURE PAYMENT
     # ========================================================
 
     if (
-        "order" in q
-        and any(
-            x in q
-            for x in [
-                "order id",
-                "order_id",
-                "orderid",
-            ]
-        )
+        "capture" in q
+        and "payment" in q
     ):
 
-        print(
-            "[RAZORPAY] Action: fetch_order"
+        payment_id = extract_payment_id(
+            question
+        )
+
+        amount = extract_amount(
+            question
+        )
+
+
+        if payment_id is None:
+
+            state["tool_result"] = (
+                "Please provide the payment ID."
+            )
+
+            return state
+
+
+        if amount is None:
+
+            state["tool_result"] = (
+                "Please provide the capture amount."
+            )
+
+            return state
+
+
+        state["confirmation_required"] = True
+
+        state["pending_action"] = (
+            "capture_payment"
+        )
+
+        state["pending_args"] = {
+
+            "payment_id": payment_id,
+
+            "amount": amount,
+
+            "currency": "INR",
+        }
+
+
+        state["tool"] = (
+            "razorpay.capture_payment"
         )
 
         state["tool_result"] = (
-            "Please provide the Razorpay order ID. "
-            "Example: Show order order_XXXXXXXXXXXXXX"
+            "CONFIRMATION_REQUIRED"
         )
 
         return state
 
+
     # ========================================================
-    # FETCH SPECIFIC REFUND
+    # UPDATE ORDER
     # ========================================================
 
     if (
-        "refund" in q
-        and any(
-            x in q
-            for x in [
-                "refund id",
-                "refund_id",
-                "refundid",
-            ]
-        )
+        "update" in q
+        and "order" in q
     ):
 
-        print(
-            "[RAZORPAY] Action: fetch_refund"
+        order_id = extract_order_id(
+            question
+        )
+
+
+        if order_id is None:
+
+            state["tool_result"] = (
+                "Please provide the Razorpay order ID."
+            )
+
+            return state
+
+
+        note = "test completed"
+
+
+        match = re.search(
+            r"note\s+(.+)$",
+            question,
+            re.IGNORECASE
+        )
+
+
+        if match:
+
+            note = match.group(1).strip()
+
+
+        state["confirmation_required"] = True
+
+        state["pending_action"] = (
+            "update_order"
+        )
+
+        state["pending_args"] = {
+
+            "order_id": order_id,
+
+            "notes": {
+                "test": note
+            },
+        }
+
+
+        state["tool"] = (
+            "razorpay.update_order"
         )
 
         state["tool_result"] = (
-            "Please provide the Razorpay refund ID. "
-            "Example: Show refund rfnd_XXXXXXXXXXXXXX"
+            "CONFIRMATION_REQUIRED"
         )
 
         return state
+
+
+    # ========================================================
+    # SPECIFIC PAYMENT
+    # ========================================================
+
+    payment_id = extract_payment_id(
+        question
+    )
+
+
+    if (
+        payment_id
+        and "capture" not in q
+    ):
+
+        try:
+
+            result = mcp_razorpay_fetch_payment(
+                payment_id
+            )
+
+            state["tool_result"] = str(
+                result
+            )
+
+        except Exception as e:
+
+            state["tool_result"] = (
+                f"Razorpay payment fetch failed: {e}"
+            )
+
+        return state
+
+
+    # ========================================================
+    # SPECIFIC ORDER
+    # ========================================================
+
+    order_id = extract_order_id(
+        question
+    )
+
+
+    if (
+        order_id
+        and "update" not in q
+    ):
+
+        try:
+
+            result = mcp_razorpay_fetch_order(
+                order_id
+            )
+
+            state["tool_result"] = str(
+                result
+            )
+
+        except Exception as e:
+
+            state["tool_result"] = (
+                f"Razorpay order fetch failed: {e}"
+            )
+
+        return state
+
+
+    # ========================================================
+    # SPECIFIC REFUND
+    # ========================================================
+
+    refund_id = extract_refund_id(
+        question
+    )
+
+
+    if refund_id:
+
+        try:
+
+            result = mcp_razorpay_fetch_refund(
+                refund_id
+            )
+
+            state["tool_result"] = str(
+                result
+            )
+
+        except Exception as e:
+
+            state["tool_result"] = (
+                f"Razorpay refund fetch failed: {e}"
+            )
+
+        return state
+
 
     # ========================================================
     # PAYMENT LINKS
     # ========================================================
 
-    if (
-        "payment link" in q
-        or "payment links" in q
-    ):
-
-        print(
-            "[RAZORPAY] Action: fetch_all_payment_links"
-        )
+    if "payment link" in q:
 
         try:
 
@@ -508,25 +1064,18 @@ def razorpay_node(state: AgentState):
 
         except Exception as e:
 
-            print(
-                f"[RAZORPAY ERROR] {e}"
-            )
-
             state["tool_result"] = (
                 f"Razorpay payment links failed: {e}"
             )
 
         return state
 
+
     # ========================================================
     # REFUNDS
     # ========================================================
 
     if "refund" in q:
-
-        print(
-            "[RAZORPAY] Action: fetch_all_refunds"
-        )
 
         try:
 
@@ -543,25 +1092,18 @@ def razorpay_node(state: AgentState):
 
         except Exception as e:
 
-            print(
-                f"[RAZORPAY ERROR] {e}"
-            )
-
             state["tool_result"] = (
                 f"Razorpay refunds failed: {e}"
             )
 
         return state
 
+
     # ========================================================
     # SETTLEMENTS
     # ========================================================
 
     if "settlement" in q:
-
-        print(
-            "[RAZORPAY] Action: fetch_settlements"
-        )
 
         try:
 
@@ -578,25 +1120,18 @@ def razorpay_node(state: AgentState):
 
         except Exception as e:
 
-            print(
-                f"[RAZORPAY ERROR] {e}"
-            )
-
             state["tool_result"] = (
                 f"Razorpay settlements failed: {e}"
             )
 
         return state
 
+
     # ========================================================
     # ORDERS
     # ========================================================
 
     if "order" in q:
-
-        print(
-            "[RAZORPAY] Action: fetch_all_orders"
-        )
 
         try:
 
@@ -613,25 +1148,18 @@ def razorpay_node(state: AgentState):
 
         except Exception as e:
 
-            print(
-                f"[RAZORPAY ERROR] {e}"
-            )
-
             state["tool_result"] = (
                 f"Razorpay orders failed: {e}"
             )
 
         return state
 
+
     # ========================================================
     # PAYMENTS
     # ========================================================
 
     if "payment" in q:
-
-        print(
-            "[RAZORPAY] Action: fetch_all_payments"
-        )
 
         try:
 
@@ -648,46 +1176,16 @@ def razorpay_node(state: AgentState):
 
         except Exception as e:
 
-            print(
-                f"[RAZORPAY ERROR] {e}"
-            )
-
             state["tool_result"] = (
                 f"Razorpay payments failed: {e}"
             )
 
         return state
 
-    # ========================================================
-    # DEFAULT RAZORPAY ACTION
-    # ========================================================
 
-    print(
-        "[RAZORPAY] Action: fetch_all_payments"
+    state["tool_result"] = (
+        "I couldn't determine the Razorpay operation."
     )
-
-    try:
-
-        result = (
-            mcp_razorpay_fetch_all_payments(
-                count=10,
-                skip=0
-            )
-        )
-
-        state["tool_result"] = str(
-            result
-        )
-
-    except Exception as e:
-
-        print(
-            f"[RAZORPAY ERROR] {e}"
-        )
-
-        state["tool_result"] = (
-            f"Razorpay request failed: {e}"
-        )
 
     return state
 
@@ -699,7 +1197,7 @@ def razorpay_node(state: AgentState):
 def general_node(state: AgentState):
 
     print(
-        "\n[AGENT] General question"
+        "[AGENT] General AI question"
     )
 
     state["tool_result"] = ""
@@ -713,9 +1211,9 @@ def general_node(state: AgentState):
 
 def answer_node(state: AgentState):
 
-    print(
-        "\n[AGENT] Sending request to Gemini..."
-    )
+    request_id = state.get("request_id") or create_request_id()
+    state["request_id"] = request_id
+    log_event(request_id, "ANSWER_GENERATION_STARTED", "Generating final answer")
 
     question = state.get(
         "question",
@@ -742,14 +1240,117 @@ def answer_node(state: AgentState):
         ""
     )
 
+
     # ========================================================
-    # BUILD PROMPT
+    # RAZORPAY CONFIRMATION
+    # ========================================================
+
+    if state.get(
+        "confirmation_required",
+        False
+    ):
+
+        action = state.get(
+            "pending_action",
+            ""
+        )
+
+        args = state.get(
+            "pending_args",
+            {}
+        )
+
+
+        if action == "create_order":
+
+            state["answer"] = (
+                "⚠️ **Razorpay confirmation required**\n\n"
+
+                "**Action:** Create Razorpay Order\n\n"
+
+                f"**Amount:** `{args.get('amount')}` "
+                f"**Currency:** `{args.get('currency', 'INR')}`\n"
+
+                f"**Receipt:** `{args.get('receipt')}`\n\n"
+
+                "This operation can modify your Razorpay account.\n\n"
+
+                "**Do you want to continue?**\n\n"
+
+                "Type **YES** to execute or **NO** to cancel."
+            )
+
+
+        elif action == "create_payment_link":
+
+            state["answer"] = (
+                "⚠️ **Razorpay confirmation required**\n\n"
+
+                "**Action:** Create Razorpay Payment Link\n\n"
+
+                f"**Amount:** `{args.get('amount')}` "
+                f"**Currency:** `{args.get('currency', 'INR')}`\n"
+
+                f"**Description:** `{args.get('description')}`\n\n"
+
+                "This operation can modify your Razorpay account.\n\n"
+
+                "**Do you want to continue?**\n\n"
+
+                "Type **YES** to execute or **NO** to cancel."
+            )
+
+
+        elif action == "update_order":
+
+            state["answer"] = (
+                "⚠️ **Razorpay confirmation required**\n\n"
+
+                "**Action:** Update Razorpay Order\n\n"
+
+                f"**Order ID:** `{args.get('order_id')}`\n"
+
+                f"**Notes:** `{args.get('notes')}`\n\n"
+
+                "This operation can modify your Razorpay account.\n\n"
+
+                "**Do you want to continue?**\n\n"
+
+                "Type **YES** to execute or **NO** to cancel."
+            )
+
+
+        elif action == "capture_payment":
+
+            state["answer"] = (
+                "⚠️ **Razorpay confirmation required**\n\n"
+
+                "**Action:** Capture Razorpay Payment\n\n"
+
+                f"**Payment ID:** `{args.get('payment_id')}`\n"
+
+                f"**Amount:** `{args.get('amount')}` "
+                f"**Currency:** `{args.get('currency', 'INR')}`\n\n"
+
+                "This operation can modify your Razorpay account.\n\n"
+
+                "**Do you want to continue?**\n\n"
+
+                "Type **YES** to execute or **NO** to cancel."
+            )
+
+
+        return state
+
+
+    # ========================================================
+    # NORMAL AI
     # ========================================================
 
     prompt = f"""
 You are an intelligent AI assistant.
 
-Answer the user's question using the available information.
+Answer the user's question clearly and naturally.
 
 USER QUESTION:
 {question}
@@ -760,21 +1361,39 @@ SELECTED TOOL:
 TOOL RESULT:
 {tool_result}
 
-MEMORY:
+LONG-TERM MEMORY:
 {memory_context}
 
 CHAT HISTORY:
 {chat_history}
 
-Instructions:
+RULES:
 
-1. Answer clearly and naturally.
-2. Do not invent information.
-3. If the tool returned no records, clearly say that no records were found.
-4. For Razorpay data, explain the result in a simple way.
-5. Do not expose internal implementation details unless the user asks.
-6. Keep the answer concise but useful.
+1. Answer the user's actual question.
+
+2. Use tool results when they are available.
+
+3. Use memory only when it is relevant.
+
+4. Use chat history only when it is relevant.
+
+5. If there is no useful tool result, answer normally using your
+   own knowledge.
+
+6. Do not invent information.
+
+7. Do not claim that a tool was used if it was not used.
+
+8. For Razorpay information, only use the supplied Razorpay result.
+
+9. If a Razorpay result contains zero records, clearly say that
+   no records were found.
+
+10. Keep the response natural and useful.
+
+ANSWER:
 """
+
 
     try:
 
@@ -785,20 +1404,24 @@ Instructions:
         state["answer"] = str(
             answer
         )
+        log_event(request_id, "ANSWER_GENERATED", "Final answer generated")
 
-        print(
-            "[AGENT] Answer generated."
-        )
 
     except Exception as e:
 
+        log_event(request_id, "ERROR", f"Answer generation failed: {e}")
         print(
-            f"[AGENT ERROR] {e}"
+            "[AGENT ERROR]",
+            e
         )
 
         state["answer"] = (
-            f"Sorry, I couldn't generate the answer: {e}"
+            "Sorry, I couldn't generate the answer."
         )
+
+
+    if tool_result:
+        state["last_tool_result"] = tool_result
 
     return state
 
@@ -809,9 +1432,8 @@ Instructions:
 
 def memory_save_node(state: AgentState):
 
-    print(
-        "\n[AGENT] Saving useful information to memory..."
-    )
+    request_id = state.get("request_id") or create_request_id()
+    state["request_id"] = request_id
 
     question = state.get(
         "question",
@@ -823,62 +1445,112 @@ def memory_save_node(state: AgentState):
         ""
     )
 
+
     # --------------------------------------------------------
-    # Save the conversation as memory
+    # NEVER SAVE RAZORPAY OPERATIONS
+    # --------------------------------------------------------
+
+    if state.get("tool") == "razorpay":
+
+        print(
+            "[MEMORY] Razorpay interaction not saved."
+        )
+
+        return state
+
+
+    # --------------------------------------------------------
+    # NEVER SAVE PDF ANSWERS
+    # --------------------------------------------------------
+
+    if state.get("tool") == "pdf":
+
+        print(
+            "[MEMORY] PDF interaction not saved."
+        )
+
+        return state
+
+
+    # --------------------------------------------------------
+    # NEVER SAVE CHAT HISTORY SEARCH
+    # --------------------------------------------------------
+
+    if state.get("tool") == "chat_history":
+
+        print(
+            "[MEMORY] Chat-history search not saved."
+        )
+
+        return state
+
+
+    # --------------------------------------------------------
+    # DON'T SAVE EMPTY ANSWERS
+    # --------------------------------------------------------
+
+    if not question or not answer:
+
+        return state
+
+
+    # --------------------------------------------------------
+    # SAVE ONLY IMPORTANT PERSONAL INFORMATION
     # --------------------------------------------------------
 
     try:
 
-        memory_text = (
-            f"User: {question}\n"
-            f"Assistant: {answer}"
+        saved = add_memory(
+            question
         )
 
-        mcp_memory_save(
-            memory_text
-        )
 
-        print(
-            "[AGENT] Memory saved."
-        )
+        if saved:
+
+            log_event(request_id, "MEMORY_SAVE_COMPLETED", "Important user information saved")
+            print(
+                "[MEMORY] Important user information saved."
+            )
+
+        else:
+
+            print(
+                "[MEMORY] Nothing important to save."
+            )
+
 
     except Exception as e:
 
+        log_event(request_id, "ERROR", f"Memory save failed: {e}")
         print(
-            f"[MEMORY SAVE ERROR] {e}"
+            "[MEMORY SAVE ERROR]",
+            e
         )
+
 
     return state
 
 
 # ============================================================
-# ROUTING FUNCTION
+# ROUTING
 # ============================================================
 
-def route_after_router(
-    state: AgentState
-):
+def route_after_router(state):
 
-    tool = state.get(
+    return state.get(
         "tool",
         "general"
     )
 
-    return tool
-
 
 # ============================================================
-# BUILD LANGGRAPH
+# BUILD GRAPH
 # ============================================================
 
 builder = StateGraph(
     AgentState
 )
 
-
-# ============================================================
-# ADD NODES
-# ============================================================
 
 builder.add_node(
     "router",
@@ -931,7 +1603,7 @@ builder.set_entry_point(
 
 
 # ============================================================
-# ROUTER → TOOL
+# ROUTER
 # ============================================================
 
 builder.add_conditional_edges(
@@ -951,13 +1623,12 @@ builder.add_conditional_edges(
         "razorpay": "razorpay",
 
         "general": "general",
-
     }
 )
 
 
 # ============================================================
-# TOOL → ANSWER
+# TOOLS → ANSWER
 # ============================================================
 
 builder.add_edge(
@@ -987,7 +1658,7 @@ builder.add_edge(
 
 
 # ============================================================
-# ANSWER → MEMORY SAVE
+# ANSWER → MEMORY
 # ============================================================
 
 builder.add_edge(
@@ -997,7 +1668,7 @@ builder.add_edge(
 
 
 # ============================================================
-# MEMORY SAVE → END
+# MEMORY → END
 # ============================================================
 
 builder.add_edge(
@@ -1007,48 +1678,89 @@ builder.add_edge(
 
 
 # ============================================================
-# COMPILE GRAPH
+# COMPILE
 # ============================================================
 
 graph = builder.compile()
 
 
+print(
+    "[UNIFIED AGENT] Loaded successfully."
+)
+
+
 # ============================================================
-# TEST
+# TERMINAL TEST
 # ============================================================
 
 if __name__ == "__main__":
 
+    print()
     print(
         "========================================"
     )
 
     print(
-        "        UNIFIED AGENT TEST"
+        "       UNIFIED AI AGENT"
     )
 
     print(
         "========================================"
     )
 
-    result = graph.invoke(
-        {
-            "question": "Show my Razorpay payments",
-            "chat_history": "",
-            "memory_context": "",
-            "tool": "",
-            "tool_result": "",
-            "answer": "",
-        }
+    print(
+        "Type 'exit' to stop."
     )
 
-    print(
-        "\nFINAL ANSWER:"
-    )
 
-    print(
-        result.get(
-            "answer",
-            ""
+    while True:
+
+        question = input(
+            "\nAsk a question: "
         )
-    )
+
+
+        if question.lower().strip() == "exit":
+
+            print(
+                "\nGoodbye!"
+            )
+
+            break
+
+
+        if not question.strip():
+
+            continue
+
+
+        result = graph.invoke(
+
+            {
+
+                "question": question,
+
+                "chat_history": "",
+
+                "memory_context": "",
+
+                "tool": "",
+
+                "tool_result": "",
+
+                "answer": "",
+            }
+        )
+
+
+        print()
+        print(
+            "ANSWER:"
+        )
+
+        print(
+            result.get(
+                "answer",
+                ""
+            )
+        )

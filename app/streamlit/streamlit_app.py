@@ -1,7 +1,6 @@
 import os
 import sys
 import re
-import json
 import streamlit as st
 
 
@@ -10,11 +9,25 @@ import streamlit as st
 # ============================================================
 
 PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        ".."
+    )
 )
 
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+
+
+# ============================================================
+# OBSERVABILITY
+# ============================================================
+
+from app.monitoring.logger import (
+    create_request_id,
+    log_event,
+)
 
 
 # ============================================================
@@ -59,7 +72,9 @@ st.set_page_config(
 # HEADER
 # ============================================================
 
-st.title("🤖 Intelligent AI Assistant")
+st.title(
+    "🤖 Intelligent AI Assistant"
+)
 
 st.caption(
     "Memory • PDF RAG • Chat History • Razorpay MCP • AI"
@@ -76,6 +91,15 @@ if "messages" not in st.session_state:
 if "pending_razorpay_action" not in st.session_state:
     st.session_state.pending_razorpay_action = None
 
+if "last_razorpay_result" not in st.session_state:
+    st.session_state.last_razorpay_result = ""
+
+if "previous_tool" not in st.session_state:
+    st.session_state.previous_tool = ""
+
+if "current_request_id" not in st.session_state:
+    st.session_state.current_request_id = None
+
 
 # ============================================================
 # SIDEBAR
@@ -83,7 +107,9 @@ if "pending_razorpay_action" not in st.session_state:
 
 with st.sidebar:
 
-    st.header("⚙️ Chat Controls")
+    st.header(
+        "⚙️ Chat Controls"
+    )
 
     if st.button(
         "🗑️ Clear Chat",
@@ -91,19 +117,40 @@ with st.sidebar:
     ):
 
         st.session_state.messages = []
+
         st.session_state.pending_razorpay_action = None
+
+        st.session_state.last_razorpay_result = ""
+
+        st.session_state.previous_tool = ""
 
         st.rerun()
 
     st.divider()
 
-    st.subheader("🧠 Agent Capabilities")
+    st.subheader(
+        "🧠 Agent Capabilities"
+    )
 
-    st.write("🧠 Long-term Memory")
-    st.write("📄 PDF RAG")
-    st.write("💬 Chat History")
-    st.write("💳 Razorpay MCP")
-    st.write("✨ General AI")
+    st.write(
+        "🧠 Long-term Memory"
+    )
+
+    st.write(
+        "📄 PDF RAG"
+    )
+
+    st.write(
+        "💬 Chat History"
+    )
+
+    st.write(
+        "💳 Razorpay MCP"
+    )
+
+    st.write(
+        "✨ General AI"
+    )
 
     st.divider()
 
@@ -120,7 +167,9 @@ with st.sidebar:
 
 for message in st.session_state.messages:
 
-    with st.chat_message(message["role"]):
+    with st.chat_message(
+        message["role"]
+    ):
 
         st.markdown(
             message["content"]
@@ -147,6 +196,7 @@ def get_chat_history():
     for message in st.session_state.messages:
 
         role = message["role"]
+
         content = message["content"]
 
         if role == "user":
@@ -171,8 +221,11 @@ def get_chat_history():
 def extract_amount(text):
 
     patterns = [
+
         r"(?:₹|rs\.?|inr)\s*([0-9]+(?:\.[0-9]+)?)",
+
         r"([0-9]+(?:\.[0-9]+)?)\s*(?:rupees|rs|inr)",
+
     ]
 
     for pattern in patterns:
@@ -185,9 +238,12 @@ def extract_amount(text):
 
         if match:
 
-            value = float(match.group(1))
+            value = float(
+                match.group(1)
+            )
 
             if value.is_integer():
+
                 return int(value)
 
             return value
@@ -208,6 +264,7 @@ def extract_order_id(text):
     )
 
     if match:
+
         return match.group(0)
 
     return None
@@ -226,6 +283,7 @@ def extract_payment_id(text):
     )
 
     if match:
+
         return match.group(0)
 
     return None
@@ -244,6 +302,7 @@ def extract_refund_id(text):
     )
 
     if match:
+
         return match.group(0)
 
     return None
@@ -262,6 +321,7 @@ def extract_payment_link_id(text):
     )
 
     if match:
+
         return match.group(0)
 
     return None
@@ -280,6 +340,7 @@ def extract_receipt(text):
     )
 
     if match:
+
         return match.group(1)
 
     return None
@@ -297,6 +358,7 @@ def extract_description(text):
     )
 
     if quoted:
+
         return quoted.group(1)
 
     match = re.search(
@@ -317,6 +379,7 @@ def extract_description(text):
         )
 
         if description:
+
             return description
 
     return "Testing payment"
@@ -330,69 +393,93 @@ def detect_razorpay_write_action(question):
 
     q = question.lower().strip()
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # CREATE ORDER
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "create" in q
         and "order" in q
     ):
 
-        amount = extract_amount(question)
-        receipt = extract_receipt(question)
+        amount = extract_amount(
+            question
+        )
+
+        receipt = extract_receipt(
+            question
+        )
 
         if amount is None:
+
             return {
                 "error": "Please provide the order amount."
             }
 
         return {
+
             "tool": "create_order",
+
             "arguments": {
                 "amount": amount,
                 "currency": "INR",
                 "receipt": receipt,
             },
+
             "label": "Create Razorpay Order",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CREATE PAYMENT LINK
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
-        "create" in q
-        and "payment link" in q
-    ) or (
-        "generate" in q
-        and "payment link" in q
+        (
+            "create" in q
+            and "payment link" in q
+        )
+        or
+        (
+            "generate" in q
+            and "payment link" in q
+        )
     ):
 
-        amount = extract_amount(question)
+        amount = extract_amount(
+            question
+        )
 
         if amount is None:
+
             return {
-                "error": "Please provide the payment-link amount."
+                "error": (
+                    "Please provide the payment-link amount."
+                )
             }
 
-        description = extract_description(question)
+        description = extract_description(
+            question
+        )
 
         return {
+
             "tool": "create_payment_link",
+
             "arguments": {
                 "amount": amount,
                 "currency": "INR",
                 "description": description,
             },
+
             "label": "Create Razorpay Payment Link",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CREATE REFUND
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "create refund" in q
@@ -400,9 +487,12 @@ def detect_razorpay_write_action(question):
         or "refund payment" in q
     ):
 
-        payment_id = extract_payment_id(question)
+        payment_id = extract_payment_id(
+            question
+        )
 
         if not payment_id:
+
             return {
                 "error": (
                     "Please provide the Razorpay payment ID "
@@ -410,36 +500,47 @@ def detect_razorpay_write_action(question):
                 )
             }
 
-        amount = extract_amount(question)
+        amount = extract_amount(
+            question
+        )
 
         arguments = {
             "payment_id": payment_id
         }
 
         if amount is not None:
+
             arguments["amount"] = amount
 
         return {
+
             "tool": "create_refund",
+
             "arguments": arguments,
+
             "label": "Create Razorpay Refund",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # UPDATE ORDER
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "update order" in q
         or "modify order" in q
     ):
 
-        order_id = extract_order_id(question)
+        order_id = extract_order_id(
+            question
+        )
 
         if not order_id:
+
             return {
-                "error": "Please provide the Razorpay order ID."
+                "error": (
+                    "Please provide the Razorpay order ID."
+                )
             }
 
         note_match = re.search(
@@ -449,36 +550,50 @@ def detect_razorpay_write_action(question):
         )
 
         if note_match:
+
             note = note_match.group(1).strip()
+
         else:
+
             note = "Updated by AI assistant"
 
         return {
+
             "tool": "update_order",
+
             "arguments": {
+
                 "order_id": order_id,
+
                 "notes": {
                     "test": note
                 },
+
             },
+
             "label": "Update Razorpay Order",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # UPDATE PAYMENT
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "update payment" in q
         or "modify payment" in q
     ):
 
-        payment_id = extract_payment_id(question)
+        payment_id = extract_payment_id(
+            question
+        )
 
         if not payment_id:
+
             return {
-                "error": "Please provide the Razorpay payment ID."
+                "error": (
+                    "Please provide the Razorpay payment ID."
+                )
             }
 
         note_match = re.search(
@@ -487,64 +602,86 @@ def detect_razorpay_write_action(question):
             re.IGNORECASE
         )
 
-        note = (
-            note_match.group(1).strip()
-            if note_match
-            else "Updated by AI assistant"
-        )
+        if note_match:
+
+            note = note_match.group(1).strip()
+
+        else:
+
+            note = "Updated by AI assistant"
 
         return {
+
             "tool": "update_payment",
+
             "arguments": {
+
                 "payment_id": payment_id,
+
                 "notes": {
                     "test": note
                 },
+
             },
+
             "label": "Update Razorpay Payment",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # UPDATE REFUND
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "update refund" in q
         or "modify refund" in q
     ):
 
-        refund_id = extract_refund_id(question)
+        refund_id = extract_refund_id(
+            question
+        )
 
         if not refund_id:
+
             return {
-                "error": "Please provide the Razorpay refund ID."
+                "error": (
+                    "Please provide the Razorpay refund ID."
+                )
             }
 
         return {
+
             "tool": "update_refund",
+
             "arguments": {
+
                 "refund_id": refund_id,
+
                 "notes": {
                     "test": "Updated by AI assistant"
                 },
+
             },
+
             "label": "Update Razorpay Refund",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # UPDATE PAYMENT LINK
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "update payment link" in q
         or "modify payment link" in q
     ):
 
-        payment_link_id = extract_payment_link_id(question)
+        payment_link_id = extract_payment_link_id(
+            question
+        )
 
         if not payment_link_id:
+
             return {
                 "error": (
                     "Please provide the Razorpay payment "
@@ -559,31 +696,47 @@ def detect_razorpay_write_action(question):
         )
 
         arguments = {
-            "payment_link_id": payment_link_id
+
+            "payment_link_id":
+                payment_link_id
+
         }
 
         if reference_match:
-            arguments["reference_id"] = reference_match.group(1)
+
+            arguments["reference_id"] = (
+                reference_match.group(1)
+            )
 
         return {
+
             "tool": "update_payment_link",
+
             "arguments": arguments,
+
             "label": "Update Razorpay Payment Link",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # PAYMENT LINK NOTIFICATION
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
-        "notify" in q
-        and "payment link" in q
-    ) or "send payment link" in q:
+        (
+            "notify" in q
+            and "payment link" in q
+        )
+        or
+        "send payment link" in q
+    ):
 
-        payment_link_id = extract_payment_link_id(question)
+        payment_link_id = extract_payment_link_id(
+            question
+        )
 
         if not payment_link_id:
+
             return {
                 "error": (
                     "Please provide the Razorpay payment "
@@ -594,50 +747,79 @@ def detect_razorpay_write_action(question):
         medium = "sms"
 
         if "email" in q:
+
             medium = "email"
+
         elif "whatsapp" in q:
+
             medium = "whatsapp"
 
         return {
+
             "tool": "payment_link_notify",
+
             "arguments": {
-                "payment_link_id": payment_link_id,
-                "medium": medium,
+
+                "payment_link_id":
+                    payment_link_id,
+
+                "medium":
+                    medium,
+
             },
-            "label": "Send Razorpay Payment Link Notification",
+
+            "label":
+                "Send Razorpay Payment Link Notification",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CREATE UPI PAYMENT LINK
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "upi payment link" in q
         or "create upi link" in q
     ):
 
-        amount = extract_amount(question)
+        amount = extract_amount(
+            question
+        )
 
         if amount is None:
+
             return {
-                "error": "Please provide the UPI payment amount."
+                "error": (
+                    "Please provide the UPI payment amount."
+                )
             }
 
         return {
-            "tool": "payment_link_upi_create",
+
+            "tool":
+                "payment_link_upi_create",
+
             "arguments": {
-                "amount": amount,
-                "currency": "INR",
-                "description": extract_description(question),
+
+                "amount":
+                    amount,
+
+                "currency":
+                    "INR",
+
+                "description":
+                    extract_description(question),
+
             },
-            "label": "Create Razorpay UPI Payment Link",
+
+            "label":
+                "Create Razorpay UPI Payment Link",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CREATE QR
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "create qr" in q
@@ -645,92 +827,149 @@ def detect_razorpay_write_action(question):
         or "generate qr" in q
     ):
 
-        amount = extract_amount(question)
+        amount = extract_amount(
+            question
+        )
 
         if amount is None:
+
             return {
-                "error": "Please provide the QR payment amount."
+                "error": (
+                    "Please provide the QR payment amount."
+                )
             }
 
         return {
-            "tool": "create_qr_code",
+
+            "tool":
+                "create_qr_code",
+
             "arguments": {
-                "payment_amount": amount,
-                "description": extract_description(question),
+
+                "payment_amount":
+                    amount,
+
+                "description":
+                    extract_description(question),
+
             },
-            "label": "Create Razorpay QR Code",
+
+            "label":
+                "Create Razorpay QR Code",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CAPTURE PAYMENT
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "capture payment" in q
         or "capture the payment" in q
     ):
 
-        payment_id = extract_payment_id(question)
-        amount = extract_amount(question)
+        payment_id = extract_payment_id(
+            question
+        )
+
+        amount = extract_amount(
+            question
+        )
 
         if not payment_id:
+
             return {
-                "error": "Please provide the payment ID."
+                "error":
+                    "Please provide the payment ID."
             }
 
         if amount is None:
+
             return {
-                "error": "Please provide the capture amount."
+                "error":
+                    "Please provide the capture amount."
             }
 
         return {
-            "tool": "capture_payment",
+
+            "tool":
+                "capture_payment",
+
             "arguments": {
-                "payment_id": payment_id,
-                "amount": amount,
-                "currency": "INR",
+
+                "payment_id":
+                    payment_id,
+
+                "amount":
+                    amount,
+
+                "currency":
+                    "INR",
+
             },
-            "label": "Capture Razorpay Payment",
+
+            "label":
+                "Capture Razorpay Payment",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # INITIATE PAYMENT
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         "initiate payment" in q
         or "start payment" in q
     ):
 
-        amount = extract_amount(question)
-        order_id = extract_order_id(question)
+        amount = extract_amount(
+            question
+        )
+
+        order_id = extract_order_id(
+            question
+        )
 
         if amount is None:
+
             return {
-                "error": "Please provide the payment amount."
+                "error":
+                    "Please provide the payment amount."
             }
 
         if not order_id:
+
             return {
-                "error": "Please provide the Razorpay order ID."
+                "error":
+                    "Please provide the Razorpay order ID."
             }
 
         return {
-            "tool": "initiate_payment",
+
+            "tool":
+                "initiate_payment",
+
             "arguments": {
-                "amount": amount,
-                "currency": "INR",
-                "order_id": order_id,
+
+                "amount":
+                    amount,
+
+                "currency":
+                    "INR",
+
+                "order_id":
+                    order_id,
+
             },
-            "label": "Initiate Razorpay Payment",
+
+            "label":
+                "Initiate Razorpay Payment",
         }
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # NOT A WRITE OPERATION
-    # --------------------------------------------------------
+    # ========================================================
 
     return None
 
@@ -742,19 +981,27 @@ def detect_razorpay_write_action(question):
 def build_confirmation(action):
 
     tool = action["tool"]
+
     args = action["arguments"]
+
     label = action["label"]
 
     lines = [
+
         "⚠️ **Razorpay confirmation required**",
+
         "",
+
         f"**Action:** {label}",
+
         "",
+
     ]
 
     for key, value in args.items():
 
         if value is None:
+
             continue
 
         pretty_key = key.replace(
@@ -768,193 +1015,273 @@ def build_confirmation(action):
 
     lines.extend(
         [
+
             "",
+
             "This operation can modify your Razorpay account.",
+
             "",
+
             "**Do you want to continue?**",
+
             "",
+
             "Type **YES** to execute or **NO** to cancel.",
+
         ]
     )
 
-    return "\n".join(lines)
+    return "\n".join(
+        lines
+    )
 
 
 # ============================================================
 # EXECUTE CONFIRMED RAZORPAY ACTION
 # ============================================================
 
-def execute_confirmed_razorpay_action(action):
+def execute_confirmed_razorpay_action(
+    action
+):
 
     tool = action["tool"]
+
     args = action["arguments"]
 
-    print(
-        "\n[CONFIRMED RAZORPAY ACTION]"
-    )
 
-    print(
-        "Tool:",
-        tool
-    )
-
-    print(
-        "Arguments:",
-        args
-    )
-
-    # --------------------------------------------------------
+    # ========================================================
     # CREATE ORDER
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "create_order":
 
         return mcp_razorpay_create_order(
+
             amount=args["amount"],
-            currency=args.get("currency", "INR"),
-            receipt=args.get("receipt"),
+
+            currency=args.get(
+                "currency",
+                "INR"
+            ),
+
+            receipt=args.get(
+                "receipt"
+            ),
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CREATE PAYMENT LINK
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "create_payment_link":
 
         return mcp_razorpay_create_payment_link(
+
             amount=args["amount"],
+
             description=args["description"],
-            currency=args.get("currency", "INR"),
+
+            currency=args.get(
+                "currency",
+                "INR"
+            ),
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CREATE REFUND
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "create_refund":
 
         return mcp_razorpay_create_refund(
+
             payment_id=args["payment_id"],
-            amount=args.get("amount"),
+
+            amount=args.get(
+                "amount"
+            ),
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # UPDATE ORDER
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "update_order":
 
         return mcp_razorpay_update_order(
+
             order_id=args["order_id"],
+
             notes=args["notes"],
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # UPDATE PAYMENT
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "update_payment":
 
         return mcp_razorpay_update_payment(
+
             payment_id=args["payment_id"],
+
             notes=args["notes"],
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # UPDATE REFUND
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "update_refund":
 
         return mcp_razorpay_update_refund(
+
             refund_id=args["refund_id"],
+
             notes=args["notes"],
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # UPDATE PAYMENT LINK
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "update_payment_link":
 
         update_args = {
+
             key: value
+
             for key, value in args.items()
+
             if key != "payment_link_id"
+
         }
 
         return mcp_razorpay_update_payment_link(
+
             args["payment_link_id"],
+
             **update_args
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # PAYMENT LINK NOTIFY
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "payment_link_notify":
 
         return mcp_razorpay_payment_link_notify(
-            payment_link_id=args["payment_link_id"],
-            medium=args["medium"],
+
+            payment_link_id=args[
+                "payment_link_id"
+            ],
+
+            medium=args[
+                "medium"
+            ],
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # UPI PAYMENT LINK
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "payment_link_upi_create":
 
         return mcp_razorpay_payment_link_upi_create(
+
             amount=args["amount"],
+
             description=args["description"],
-            currency=args.get("currency", "INR"),
+
+            currency=args.get(
+                "currency",
+                "INR"
+            ),
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # QR CODE
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "create_qr_code":
 
         return mcp_razorpay_create_qr_code(
-            payment_amount=args["payment_amount"],
-            description=args.get("description", ""),
+
+            payment_amount=args[
+                "payment_amount"
+            ],
+
+            description=args.get(
+                "description",
+                ""
+            ),
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CAPTURE PAYMENT
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "capture_payment":
 
         return mcp_razorpay_capture_payment(
-            payment_id=args["payment_id"],
-            amount=args["amount"],
-            currency=args.get("currency", "INR"),
+
+            payment_id=args[
+                "payment_id"
+            ],
+
+            amount=args[
+                "amount"
+            ],
+
+            currency=args.get(
+                "currency",
+                "INR"
+            ),
+
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # INITIATE PAYMENT
-    # --------------------------------------------------------
+    # ========================================================
 
     if tool == "initiate_payment":
 
         return mcp_razorpay_initiate_payment(
-            amount=args["amount"],
-            currency=args.get("currency", "INR"),
-            order_id=args["order_id"],
+
+            amount=args[
+                "amount"
+            ],
+
+            currency=args.get(
+                "currency",
+                "INR"
+            ),
+
+            order_id=args[
+                "order_id"
+            ],
+
         )
 
 
@@ -974,11 +1301,16 @@ def save_message(
 ):
 
     st.session_state.messages.append(
+
         {
             "role": role,
+
             "content": content,
+
             "tool": tool,
+
         }
+
     )
 
 
@@ -997,9 +1329,22 @@ user_question = st.chat_input(
 
 if user_question:
 
-    # --------------------------------------------------------
+    request_id = create_request_id()
+
+    st.session_state.current_request_id = (
+        request_id
+    )
+
+    log_event(
+        request_id,
+        "REQUEST_RECEIVED",
+        "User message received by Streamlit"
+    )
+
+
+    # ========================================================
     # SAVE USER MESSAGE
-    # --------------------------------------------------------
+    # ========================================================
 
     save_message(
         "user",
@@ -1007,9 +1352,9 @@ if user_question:
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # DISPLAY USER
-    # --------------------------------------------------------
+    # ========================================================
 
     with st.chat_message("user"):
 
@@ -1018,9 +1363,9 @@ if user_question:
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CHECK EXISTING CONFIRMATION
-    # --------------------------------------------------------
+    # ========================================================
 
     pending = (
         st.session_state.pending_razorpay_action
@@ -1034,15 +1379,22 @@ if user_question:
     if pending:
 
         answer = ""
+
         selected_tool = ""
 
-        normalized = user_question.strip().lower()
+        normalized = (
+            user_question
+            .strip()
+            .lower()
+        )
 
-        # ----------------------------------------------------
+
+        # ====================================================
         # YES
-        # ----------------------------------------------------
+        # ====================================================
 
         if normalized in {
+
             "yes",
             "y",
             "confirm",
@@ -1050,15 +1402,27 @@ if user_question:
             "yes please",
             "proceed",
             "continue",
+
         }:
 
-            with st.chat_message("assistant"):
+            with st.chat_message(
+                "assistant"
+            ):
 
                 with st.spinner(
                     "💳 Executing Razorpay operation..."
                 ):
 
                     try:
+
+                        log_event(
+                            request_id,
+                            "RAZORPAY_CONFIRMED",
+                            pending.get(
+                                "tool",
+                                ""
+                            )
+                        )
 
                         result = (
                             execute_confirmed_razorpay_action(
@@ -1071,8 +1435,17 @@ if user_question:
                         )
 
                         answer = (
-                            "✅ **Razorpay operation completed "
-                            "successfully.**"
+                            "✅ **Razorpay operation "
+                            "completed successfully.**"
+                        )
+
+                        log_event(
+                            request_id,
+                            "RAZORPAY_OPERATION_COMPLETED",
+                            pending.get(
+                                "tool",
+                                ""
+                            )
                         )
 
                         st.markdown(
@@ -1092,7 +1465,14 @@ if user_question:
                                 language="json"
                             )
 
+
                     except Exception as e:
+
+                        log_event(
+                            request_id,
+                            "ERROR",
+                            f"Razorpay operation failed: {e}"
+                        )
 
                         answer = (
                             "❌ **Razorpay operation failed.**\n\n"
@@ -1103,7 +1483,10 @@ if user_question:
                             str(e)
                         )
 
-            st.session_state.pending_razorpay_action = None
+
+            st.session_state.pending_razorpay_action = (
+                None
+            )
 
             save_message(
                 "assistant",
@@ -1112,17 +1495,19 @@ if user_question:
             )
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # NO
-        # ----------------------------------------------------
+        # ====================================================
 
         elif normalized in {
+
             "no",
             "n",
             "cancel",
             "cancel it",
             "don't",
             "do not",
+
         }:
 
             answer = (
@@ -1130,13 +1515,17 @@ if user_question:
                 "No changes were made to your Razorpay account."
             )
 
-            with st.chat_message("assistant"):
+            with st.chat_message(
+                "assistant"
+            ):
 
                 st.markdown(
                     answer
                 )
 
-            st.session_state.pending_razorpay_action = None
+            st.session_state.pending_razorpay_action = (
+                None
+            )
 
             save_message(
                 "assistant",
@@ -1144,9 +1533,9 @@ if user_question:
             )
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # INVALID CONFIRMATION
-        # ----------------------------------------------------
+        # ====================================================
 
         else:
 
@@ -1157,7 +1546,9 @@ if user_question:
                 "**NO** to cancel it."
             )
 
-            with st.chat_message("assistant"):
+            with st.chat_message(
+                "assistant"
+            ):
 
                 st.warning(
                     answer
@@ -1192,9 +1583,13 @@ if user_question:
 
         if write_action:
 
-            with st.chat_message("assistant"):
+            with st.chat_message(
+                "assistant"
+            ):
 
-                if write_action.get("error"):
+                if write_action.get(
+                    "error"
+                ):
 
                     answer = (
                         f"❌ {write_action['error']}"
@@ -1239,25 +1634,50 @@ if user_question:
 
         else:
 
-            chat_history = get_chat_history()
+            chat_history = (
+                get_chat_history()
+            )
 
             initial_state = {
 
-                "question": user_question,
+                "request_id":
+                    request_id,
 
-                "chat_history": chat_history,
+                "question":
+                    user_question,
 
-                "memory_context": "",
+                "chat_history":
+                    chat_history,
 
-                "tool": "",
+                "memory_context":
+                    "",
 
-                "tool_result": "",
+                "tool":
+                    "",
 
-                "answer": "",
+                "previous_tool":
+                    st.session_state.get(
+                        "previous_tool",
+                        ""
+                    ),
+
+                "tool_result":
+                    "",
+
+                "last_tool_result":
+                    st.session_state.get(
+                        "last_razorpay_result",
+                        ""
+                    ),
+
+                "answer":
+                    "",
             }
 
 
-            with st.chat_message("assistant"):
+            with st.chat_message(
+                "assistant"
+            ):
 
                 with st.spinner(
                     "🤔 Agent is thinking..."
@@ -1265,14 +1685,75 @@ if user_question:
 
                     try:
 
+                        # ====================================
+                        # GRAPH
+                        # ====================================
+
                         result = graph.invoke(
                             initial_state
                         )
+
+
+                        # ====================================
+                        # SAVE PREVIOUS TOOL
+                        # ====================================
+
+                        st.session_state.previous_tool = (
+                            result.get(
+                                "tool",
+                                ""
+                            )
+                        )
+
+
+                        # ====================================
+                        # REQUEST COMPLETED LOG
+                        # ====================================
+
+                        log_event(
+                            request_id,
+                            "REQUEST_COMPLETED",
+                            f"tool={result.get('tool', '')}"
+                        )
+
+
+                        # ====================================
+                        # SAVE RAZORPAY RESULT
+                        # ====================================
+
+                        if (
+                            result.get(
+                                "tool"
+                            )
+                            == "razorpay"
+                        ):
+
+                            razorpay_result = (
+                                result.get(
+                                    "last_tool_result",
+                                    result.get(
+                                        "tool_result",
+                                        ""
+                                    )
+                                )
+                            )
+
+                            if razorpay_result:
+
+                                st.session_state.last_razorpay_result = (
+                                    razorpay_result
+                                )
+
+
+                        # ====================================
+                        # ANSWER
+                        # ====================================
 
                         answer = result.get(
                             "answer",
                             ""
                         )
+
 
                         if not answer:
 
@@ -1280,14 +1761,29 @@ if user_question:
                                 "I couldn't generate an answer."
                             )
 
+
+                        # ====================================
+                        # SELECTED TOOL
+                        # ====================================
+
                         selected_tool = result.get(
                             "tool",
                             ""
                         )
 
+
+                        # ====================================
+                        # DISPLAY ANSWER
+                        # ====================================
+
                         st.markdown(
                             answer
                         )
+
+
+                        # ====================================
+                        # TOOL DISPLAY
+                        # ====================================
 
                         if selected_tool:
 
@@ -1295,16 +1791,24 @@ if user_question:
                                 f"🔧 Tool used: {selected_tool}"
                             )
 
+
+                        # ====================================
+                        # RAZORPAY RAW RESULT
+                        # ====================================
+
                         tool_result = result.get(
                             "tool_result",
                             ""
                         )
 
+
                         if (
                             selected_tool
-                            and "razorpay"
+                            and
+                            "razorpay"
                             in selected_tool.lower()
-                            and tool_result
+                            and
+                            tool_result
                         ):
 
                             with st.expander(
@@ -1316,7 +1820,14 @@ if user_question:
                                     language="json"
                                 )
 
+
                     except Exception as e:
+
+                        log_event(
+                            request_id,
+                            "ERROR",
+                            f"Agent request failed: {e}"
+                        )
 
                         answer = (
                             "❌ Something went wrong.\n\n"
@@ -1328,6 +1839,7 @@ if user_question:
                         st.error(
                             str(e)
                         )
+
 
             save_message(
                 "assistant",

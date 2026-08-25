@@ -1,36 +1,14 @@
-
-# Environment variables
 .env
-
-# Virtual environment
-.venv/
-
-# Python cache
-__pycache__/
-*.pyc
-
-# VS Code
-.vscode/
-
-
-
-
-.env
+.env.*
 .venv/
 __pycache__/
 *.pyc
-
+.pytest_cache/
+logs/
 chroma_db/
-data/chat_history.json
 memory.json
-
-
-
-
-
-
-
-
-
-
-
+data/chat_history.json
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
