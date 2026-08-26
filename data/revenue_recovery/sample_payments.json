@@ -1,0 +1,92 @@
+[
+  {
+    "payment_id": "pay_DEMO001",
+    "amount": 20000,
+    "currency": "INR",
+    "status": "failed",
+    "failed_attempts": 4,
+    "attempts": 5,
+    "previous_successes": 6
+  },
+  {
+    "payment_id": "pay_DEMO002",
+    "amount": 15000,
+    "currency": "INR",
+    "status": "failed",
+    "failed_attempts": 3,
+    "attempts": 4,
+    "previous_successes": 5
+  },
+  {
+    "payment_id": "pay_DEMO003",
+    "amount": 8500,
+    "currency": "INR",
+    "status": "failed",
+    "failed_attempts": 2,
+    "attempts": 3,
+    "previous_successes": 4
+  },
+  {
+    "payment_id": "pay_DEMO004",
+    "amount": 5000,
+    "currency": "INR",
+    "status": "created",
+    "failed_attempts": 1,
+    "attempts": 2,
+    "previous_successes": 2
+  },
+  {
+    "payment_id": "pay_DEMO005",
+    "amount": 1200,
+    "currency": "INR",
+    "status": "created",
+    "failed_attempts": 0,
+    "attempts": 1,
+    "previous_successes": 1
+  },
+  {
+    "payment_id": "pay_DEMO006",
+    "amount": 750,
+    "currency": "INR",
+    "status": "paid",
+    "failed_attempts": 0,
+    "attempts": 1,
+    "previous_successes": 3
+  },
+  {
+    "payment_id": "pay_DEMO007",
+    "amount": 25000,
+    "currency": "INR",
+    "status": "failed",
+    "failed_attempts": 5,
+    "attempts": 6,
+    "previous_successes": 8
+  },
+  {
+    "payment_id": "pay_DEMO008",
+    "amount": 3000,
+    "currency": "INR",
+    "status": "failed",
+    "failed_attempts": 1,
+    "attempts": 2,
+    "previous_successes": 0
+  },
+  {
+    "payment_id": "pay_DEMO009",
+    "amount": 18000,
+    "currency": "INR",
+    "status": "failed",
+    "failed_attempts": 3,
+    "attempts": 4,
+    "previous_successes": 4
+  },
+  {
+    "payment_id": "pay_DEMO010",
+    "amount": 900,
+    "currency": "INR",
+    "status": "paid",
+    "failed_attempts": 0,
+    "attempts": 1,
+    "previous_successes": 5
+  }
+]

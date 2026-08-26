@@ -83,6 +83,14 @@ from app.agent.mcp_tools import (
     mcp_razorpay_capture_payment,
 )
 
+# ============================================================
+# REVENUE RECOVERY
+# ============================================================
+
+from app.revenue_recovery.agent_node import (
+    revenue_recovery_node,
+)
+
 
 # ============================================================
 # STATE
@@ -112,6 +120,10 @@ class AgentState(TypedDict, total=False):
     pending_args: dict
 
     previous_tool: str
+
+    recovery_analysis: dict
+    recovery_status: str
+    recovery_payments: list
 
 
 # ============================================================
@@ -284,6 +296,7 @@ def infer_previous_tool(state: AgentState):
         "pdf",
         "chat_history",
         "razorpay",
+        "revenue_recovery",
         "general",
     }:
         return previous_tool
@@ -394,6 +407,39 @@ def router_node(state: AgentState):
         selected = previous_tool
         print("[ROUTER] Context follow-up detected.")
         print("[ROUTER] Previous tool:", previous_tool)
+
+    # ========================================================
+    # REVENUE RECOVERY
+    # ========================================================
+    elif any(
+        keyword in q
+        for keyword in [
+            "revenue at risk",
+            "revenue risk",
+            "at risk revenue",
+            "recover revenue",
+            "revenue recovery",
+            "recover payment",
+            "recover payments",
+            "failed payments",
+            "payment recovery",
+            "recover my revenue",
+            "lost revenue",
+            "revenue loss",
+            "which payments are at risk",
+            "which payment is at risk",
+            "high risk payments",
+            "high-risk payments",
+
+            # Highest-priority recovery requests
+            "recover the highest-priority payment",
+            "recover the highest priority payment",
+            "recover the top payment",
+            "recover the most risky payment",
+            "recover the highest risk payment",
+        ]
+    ):
+        selected = "revenue_recovery"
 
     # ========================================================
     # RAZORPAY
@@ -1460,6 +1506,19 @@ def memory_save_node(state: AgentState):
 
 
     # --------------------------------------------------------
+    # NEVER SAVE REVENUE-RECOVERY / FINANCIAL ANALYSIS
+    # --------------------------------------------------------
+
+    if state.get("tool") == "revenue_recovery":
+
+        print(
+            "[MEMORY] Revenue-recovery interaction not saved."
+        )
+
+        return state
+
+
+    # --------------------------------------------------------
     # NEVER SAVE PDF ANSWERS
     # --------------------------------------------------------
 
@@ -1578,6 +1637,11 @@ builder.add_node(
 )
 
 builder.add_node(
+    "revenue_recovery",
+    revenue_recovery_node
+)
+
+builder.add_node(
     "general",
     general_node
 )
@@ -1622,6 +1686,8 @@ builder.add_conditional_edges(
 
         "razorpay": "razorpay",
 
+        "revenue_recovery": "revenue_recovery",
+
         "general": "general",
     }
 )
@@ -1648,6 +1714,11 @@ builder.add_edge(
 
 builder.add_edge(
     "razorpay",
+    "answer"
+)
+
+builder.add_edge(
+    "revenue_recovery",
     "answer"
 )
 

@@ -36,6 +36,13 @@ from app.monitoring.logger import (
 
 from app.agent.unified_agent import graph
 
+from app.revenue_recovery.approval import (
+    build_approval_request,
+)
+from app.revenue_recovery.audit import (
+    record_recovery_event,
+)
+
 
 # ============================================================
 # RAZORPAY MCP WRITE TOOLS
@@ -146,6 +153,10 @@ with st.sidebar:
 
     st.write(
         "💳 Razorpay MCP"
+    )
+
+    st.write(
+        "💰 Revenue Recovery"
     )
 
     st.write(
@@ -1315,6 +1326,132 @@ def save_message(
 
 
 # ============================================================
+# REVENUE RECOVERY HELPERS
+# ============================================================
+
+def is_revenue_recovery_request(question):
+
+    q = question.lower().strip()
+
+    return any(
+        phrase in q
+        for phrase in [
+            "recover revenue",
+            "revenue recovery",
+            "recover payment",
+            "recover payments",
+            "recover the payment",
+            "recover the payments",
+            "recover the highest",
+            "recover highest",
+            "recover at risk",
+            "recover my revenue",
+            "recover the highest-priority",
+            "recover highest-priority",
+        ]
+    )
+
+
+def build_recovery_write_action(result):
+
+    analysis = result.get(
+        "recovery_analysis",
+        {}
+    )
+
+    decisions = analysis.get(
+        "prioritized_decisions",
+        []
+    )
+
+    if not decisions:
+        return {
+            "error": (
+                "No recovery opportunity was identified."
+            )
+        }
+
+    top = decisions[0]
+
+    if not top.get(
+        "requires_approval",
+        False
+    ):
+        return {
+            "error": (
+                "The highest-priority transaction is not "
+                "eligible for an approved recovery action."
+            )
+        }
+
+    payment_id = top.get(
+        "payment_id"
+    )
+
+    amount = top.get(
+        "amount"
+    )
+
+    if not payment_id or amount in (
+        None,
+        0,
+    ):
+        return {
+            "error": (
+                "The recovery recommendation is missing "
+                "the payment ID or amount."
+            )
+        }
+
+    approval_request = build_approval_request(
+        payment={
+            "payment_id": payment_id,
+            "amount": amount,
+            "currency": "INR",
+        },
+        decision=top,
+    )
+
+    if not approval_request.get(
+        "requires_approval"
+    ):
+        return {
+            "error": (
+                "Recovery approval policy rejected this action."
+            )
+        }
+
+    return {
+        "tool": "create_payment_link",
+        "arguments": {
+            "amount": int(
+                float(amount)
+            ),
+            "currency": "INR",
+            "description": (
+                "Revenue recovery payment link for "
+                f"{payment_id}"
+            ),
+            "reference_id": payment_id,
+        },
+        "label": (
+            "Create Razorpay Recovery Payment Link"
+        ),
+        "recovery": True,
+        "payment_id": payment_id,
+        "amount": amount,
+        "priority": top.get(
+            "priority",
+            "HIGH"
+        ),
+        "reason": top.get(
+            "reason",
+            "Recovery opportunity identified by the revenue-recovery agent."
+        ),
+    }
+
+
+# ============================================================
 # CHAT INPUT
 # ============================================================
 
@@ -1448,6 +1585,28 @@ if user_question:
                             )
                         )
 
+                        if pending.get(
+                            "recovery",
+                            False
+                        ):
+
+                            record_recovery_event(
+                                event_type="RECOVERY_EXECUTED",
+                                payment_id=pending.get(
+                                    "payment_id"
+                                ),
+                                action=pending.get(
+                                    "tool"
+                                ),
+                                status="EXECUTED",
+                                amount=pending.get(
+                                    "amount"
+                                ),
+                                details=str(
+                                    result
+                                ),
+                            )
+
                         st.markdown(
                             answer
                         )
@@ -1565,6 +1724,198 @@ if user_question:
     # ========================================================
 
     else:
+
+        # ----------------------------------------------------
+        # REVENUE RECOVERY REQUEST
+        # ----------------------------------------------------
+
+        if is_revenue_recovery_request(
+            user_question
+        ):
+
+            with st.chat_message(
+                "assistant"
+            ):
+
+                with st.spinner(
+                    "🔎 Analyzing revenue-risk opportunities..."
+                ):
+
+                    try:
+
+                        chat_history = get_chat_history()
+
+                        initial_state = {
+                            "request_id": request_id,
+                            "question": user_question,
+                            "chat_history": chat_history,
+                            "memory_context": "",
+                            "tool": "",
+                            "previous_tool": st.session_state.get(
+                                "previous_tool",
+                                ""
+                            ),
+                            "tool_result": "",
+                            "last_tool_result": st.session_state.get(
+                                "last_razorpay_result",
+                                ""
+                            ),
+                            "answer": "",
+                        }
+
+                        result = graph.invoke(
+                            initial_state
+                        )
+
+                        if result.get(
+                            "tool"
+                        ) != "revenue_recovery":
+
+                            answer = (
+                                "I couldn't route this request "
+                                "to the revenue-recovery workflow."
+                            )
+
+                            st.warning(
+                                answer
+                            )
+
+                            save_message(
+                                "assistant",
+                                answer,
+                                result.get(
+                                    "tool",
+                                    ""
+                                )
+                            )
+
+                        else:
+
+                            recovery_analysis = result.get(
+                                "recovery_analysis",
+                                {}
+                            )
+
+                            write_action = (
+                                build_recovery_write_action(
+                                    result
+                                )
+                            )
+
+                            if write_action.get(
+                                "error"
+                            ):
+
+                                answer = (
+                                    write_action["error"]
+                                )
+
+                                st.warning(
+                                    answer
+                                )
+
+                                save_message(
+                                    "assistant",
+                                    answer,
+                                    "revenue_recovery"
+                                )
+
+                            else:
+
+                                st.session_state.pending_razorpay_action = (
+                                    write_action
+                                )
+
+                                risk_summary = (
+                                    recovery_analysis.get(
+                                        "risk_summary",
+                                        {}
+                                    )
+                                )
+
+                                answer_lines = [
+                                    "⚠️ **Recovery approval required**",
+                                    "",
+                                    f"**Payment:** `{write_action['payment_id']}`",
+                                    f"**Amount:** `₹{write_action['amount']}`",
+                                    f"**Priority:** `{write_action['priority']}`",
+                                    f"**Total potential revenue at risk:** `₹{risk_summary.get('total_revenue_at_risk', 0)}`",
+                                    "",
+                                    f"**Reason:** {write_action['reason']}",
+                                    "",
+                                    "**Recommended action:** Create a Razorpay recovery payment link.",
+                                    "",
+                                    "This operation will modify your Razorpay account.",
+                                    "",
+                                    "**Do you want to continue?**",
+                                    "",
+                                    "Type **YES** to execute or **NO** to cancel.",
+                                ]
+
+                                answer = "\n".join(
+                                    answer_lines
+                                )
+
+                                st.markdown(
+                                    answer
+                                )
+
+                                st.caption(
+                                    "🔐 Explicit approval is required before Razorpay execution."
+                                )
+
+                                record_recovery_event(
+                                    event_type=(
+                                        "RECOVERY_APPROVAL_REQUESTED"
+                                    ),
+                                    payment_id=write_action[
+                                        "payment_id"
+                                    ],
+                                    action=write_action[
+                                        "tool"
+                                    ],
+                                    status="APPROVAL_REQUIRED",
+                                    amount=write_action[
+                                        "amount"
+                                    ],
+                                    details=write_action[
+                                        "reason"
+                                    ],
+                                )
+
+                                save_message(
+                                    "assistant",
+                                    answer,
+                                    "revenue_recovery"
+                                )
+
+                    except Exception as e:
+
+                        log_event(
+                            request_id,
+                            "ERROR",
+                            f"Revenue recovery request failed: {e}"
+                        )
+
+                        answer = (
+                            "❌ **Revenue recovery analysis failed.**\n\n"
+                            f"`{str(e)}`"
+                        )
+
+                        st.error(
+                            str(e)
+                        )
+
+                        save_message(
+                            "assistant",
+                            answer,
+                            "revenue_recovery"
+                        )
+
+            # Stop this Streamlit run so the generic write detector
+            # does not reinterpret the recovery request.
+            st.stop()
+
 
         # ----------------------------------------------------
         # DETECT WRITE OPERATION
