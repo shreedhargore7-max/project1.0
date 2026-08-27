@@ -409,6 +409,33 @@ def router_node(state: AgentState):
         print("[ROUTER] Previous tool:", previous_tool)
 
     # ========================================================
+    # REVENUE RECOVERY FOLLOW-UP
+    # ========================================================
+    elif (
+        previous_tool == "revenue_recovery"
+        and extract_payment_id(question)
+        and any(
+            phrase in q
+            for phrase in [
+                "why is",
+                "why does",
+                "why was",
+                "why is this risky",
+                "why is it risky",
+                "risk reason",
+                "risk reasons",
+                "explain this payment",
+                "explain the payment",
+                "tell me about this payment",
+                "what is wrong with",
+                "what's wrong with",
+            ]
+        )
+    ):
+        selected = "revenue_recovery"
+        print("[ROUTER] Revenue-recovery follow-up detected.")
+
+    # ========================================================
     # REVENUE RECOVERY
     # ========================================================
     elif any(

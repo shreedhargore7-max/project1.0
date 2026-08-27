@@ -222,3 +222,33 @@ def test_revenue_node_uses_enriched_data_for_analysis():
         "payment_id" in item
         for item in decisions
     )
+
+
+def test_revenue_recovery_follow_up():
+
+    payments = [
+        {
+            "payment_id": "pay_DEMO007",
+            "amount": 25000,
+            "currency": "INR",
+            "status": "failed",
+            "failed_attempts": 5,
+            "attempts": 6,
+            "previous_successes": 8,
+        }
+    ]
+
+    state = {
+        "question": "Why is pay_DEMO007 risky?",
+        "recovery_payments": payments,
+        "tool": "revenue_recovery",
+        "tool_result": "",
+    }
+
+    result = revenue_recovery_node(state)
+
+    assert result["recovery_status"] == "ANALYZED"
+    assert "pay_DEMO007" in result["tool_result"]
+    assert "HIGH" in result["tool_result"]
+    assert "100" in result["tool_result"]
+    assert "failed" in result["tool_result"].lower()

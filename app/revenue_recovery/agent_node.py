@@ -4,6 +4,7 @@
 
 import ast
 import json
+import re
 
 from pathlib import Path
 from typing import Any
@@ -717,10 +718,95 @@ def revenue_recovery_node(
 
 
         # ----------------------------------------------------
-        # HIGHEST-PRIORITY RECOVERY REQUEST
+        # SPECIFIC REVENUE-RECOVERY PAYMENT EXPLANATION
         # ----------------------------------------------------
 
         q = question.lower()
+
+        payment_id_match = re.search(
+            r"\bpay_[A-Za-z0-9]+\b",
+            question,
+        )
+
+        explain_risk_request = (
+            payment_id_match is not None
+            and any(
+                phrase in q
+                for phrase in [
+                    "why is",
+                    "why does",
+                    "why was",
+                    "why is this risky",
+                    "why is it risky",
+                    "risk reason",
+                    "risk reasons",
+                    "explain this payment",
+                    "explain the payment",
+                    "tell me about this payment",
+                    "what is wrong with",
+                    "what's wrong with",
+                ]
+            )
+        )
+
+        if explain_risk_request:
+
+            requested_payment_id = payment_id_match.group(0)
+
+            matching_risk = next(
+                (
+                    item
+                    for item in analysis.get("risk_results", [])
+                    if item.get("payment_id") == requested_payment_id
+                ),
+                None,
+            )
+
+            if matching_risk is None:
+
+                state["tool_result"] = (
+                    f"I couldn't find `{requested_payment_id}` in the "
+                    "current revenue-recovery analysis."
+                )
+
+                state["recovery_status"] = "PAYMENT_NOT_FOUND_IN_ANALYSIS"
+                state["last_tool_result"] = state["tool_result"]
+                state["recovery_data_source"] = data_source
+                return state
+
+            reasons = matching_risk.get("reasons", [])
+
+            if not isinstance(reasons, list):
+                reasons = [str(reasons)] if reasons else []
+
+            lines = [
+                f"### Why `{requested_payment_id}` is risky",
+                "",
+                f"**Risk level:** **{matching_risk.get('risk_level', 'UNKNOWN')}**",
+                f"**Risk score:** **{matching_risk.get('risk_score', 0)}**",
+                f"**Amount:** ₹{matching_risk.get('amount', 0)}",
+                f"**Revenue at risk:** ₹{matching_risk.get('revenue_at_risk', 0)}",
+                "",
+                "**Reasons:**",
+            ]
+
+            if reasons:
+                lines.extend(
+                    f"- {reason}"
+                    for reason in reasons
+                )
+            else:
+                lines.append("- No detailed risk reasons were recorded.")
+
+            state["tool_result"] = "\n".join(lines)
+            state["last_tool_result"] = state["tool_result"]
+            state["recovery_status"] = "ANALYZED"
+            state["recovery_data_source"] = data_source
+            return state
+
+        # ----------------------------------------------------
+        # HIGHEST-PRIORITY RECOVERY REQUEST
+        # ----------------------------------------------------
 
 
         recovery_request = any(
