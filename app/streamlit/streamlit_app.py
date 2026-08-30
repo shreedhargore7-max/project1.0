@@ -43,6 +43,10 @@ from app.revenue_recovery.audit import (
     record_recovery_event,
 )
 
+from app.revenue_recovery.recovery_dashboard import (
+    display_recovery_dashboard,
+)
+
 
 # ============================================================
 # RAZORPAY MCP WRITE TOOLS
@@ -1794,6 +1798,10 @@ if user_question:
                             recovery_analysis = result.get(
                                 "recovery_analysis",
                                 {}
+                            )
+
+                            display_recovery_dashboard(
+                                recovery_analysis
                             )
 
                             write_action = (
